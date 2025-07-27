@@ -31,42 +31,41 @@ jobs:
     name: 'Security Scanning'
     runs-on: self-hosted
     timeout-minutes: 30
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup system environment
+      - name: Clean and Update System
         run: |
-          sudo lsof -t /var/lib/dpkg/lock-frontend | xargs -r sudo kill -9 || true
-          sudo rm -f \
-            /var/lib/apt/lists/lock \
-            /var/cache/apt/archives/lock \
-            /var/lib/dpkg/lock* \
-            /tmp/gitleaks.tmp || true
+          sudo pkill -f dpkg || true
+          sudo rm -rf /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock*
           echo 'DPkg::Lock::Timeout "120";' | sudo tee /etc/apt/apt.conf.d/100-timeout
           sudo apt-get update -y
 
-      - name: Install essential tools
+      - name: Install Essential Tools
         run: |
           sudo apt-get install -y \
-            ca-certificates \
-            curl \
-            wget \
-            unzip \
-            jq \
-            gnupg \
-            software-properties-common
+            ca-certificates curl wget unzip jq gnupg software-properties-common lsb-release apt-transport-https
 
-      - name: Setup Node.js
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Install dependencies
+      - name: Cache Node Modules
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-cache-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            npm-cache-${{ runner.os }}-
+
+      - name: Install Node Dependencies
         run: npm ci --no-audit --prefer-offline
 
-      - name: Dependency Vulnerability Scan
+      - name: Run npm Audit (Critical Only)
         run: |
           npm audit --omit=dev --audit-level=critical --json > npm-audit-results.json || true
           if jq -e '.metadata.vulnerabilities.critical > 0' npm-audit-results.json; then
@@ -74,24 +73,30 @@ jobs:
             exit 1
           fi
 
-      - name: Trivy Installation
+      - name: Install and Cache Trivy
         run: |
-          sudo apt-get install -y wget apt-transport-https gnupg lsb-release
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
-          echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee -a /etc/apt/sources.list.d/trivy.list
-          sudo apt-get update -y
-          sudo apt-get install -y trivy
+          wget -q https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz
+          tar zxvf trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz
+          sudo mv trivy /usr/local/bin/
 
-      - name: Trivy FS Scan
-        run: trivy fs --format table -o fs-report.json .
+      - name: Cache Trivy DB
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ env.TRIVY_VERSION }}
+          restore-keys: |
+            trivy-db-
+
+      - name: Run Trivy File System Scan
+        run: trivy fs --format sarif --output trivy-results.sarif .
 
       - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
         with:
           version: ${{ env.GITLEAKS_VERSION }}
-          config-path: '.gitleaks.toml'
+          config-path: .gitleaks.toml
 
-      - name: Upload Trivy Results
+      - name: Upload Trivy Scan Results
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: 'trivy-results.sarif'
+          sarif_file: trivy-results.sarif
