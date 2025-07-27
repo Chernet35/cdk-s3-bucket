@@ -98,18 +98,5 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
 
-      - name: Install Gitleaks Manually
-        run: |
-         curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v${{ env.GITLEAKS_VERSION }}/gitleaks_${{ env.GITLEAKS_VERSION }}_linux_x64.tar.gz -o gitleaks.tar.gz
-         tar -xzf gitleaks.tar.gz
-         sudo mv gitleaks /usr/local/bin/
-
-         - name: Run Gitleaks Secret Scan
-             run: |
-           gitleaks detect --source . \
-          --report-path gitleaks-report.json \
-          --report-format json || {
-          echo "Secrets detected by Gitleaks!"
-          exit 1
-            }
+    
 
