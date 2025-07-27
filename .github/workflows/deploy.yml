@@ -204,7 +204,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cdk-templates-${{ matrix.environment }}
-          path: cdk.out/
+          path: cdk.out/ 
 
       - name: Validate CDK templates with cfn-lint
         run: |
