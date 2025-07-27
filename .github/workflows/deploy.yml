@@ -46,6 +46,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Run NPM Security Audit
+        run: |
+         npm audit fix
+         if [ $? -ne 0 ]; then
+         echo "Found unfixable vulnerabilities!"
+         npm audit --audit-level=moderate
+         fi
+         npm audit --output=json > npm-audit-results.json || true
+
       # Git Secrets Scanning
       - name: Run Gitleaks Scan
         uses: gitleaks/gitleaks-action@v2
