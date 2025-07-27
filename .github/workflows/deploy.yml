@@ -1,4 +1,4 @@
-name: 'Secure CDK Deployment Pipeline'
+name: 'Deploy Secure S3 CDK Stack'
 
 on:
   push:
@@ -8,17 +8,17 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Deployment environment'
+        description: 'Environment to deploy'
         required: true
         default: 'dev'
         type: choice
-        options: [dev, prod]
+        options:
+          - dev
+          - prod
 
 env:
   AWS_REGION: us-east-1
-  NODE_VERSION: '20'
-  TRIVY_VERSION: '0.50.0'
-  GITLEAKS_VERSION: '8.24.3'
+  NODE_VERSION: '18'
 
 permissions:
   id-token: write
@@ -27,144 +27,184 @@ permissions:
   actions: read
 
 jobs:
-  compile:
-    name: '1️⃣ Compile & Lint'
-    runs-on: self-hosted
-    timeout-minutes: 10
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: npm-${{ runner.os }}-
-
-      - name: Install Dependencies
-        run: npm ci --no-audit --prefer-offline
-
-      - name: Run Lint
-        run: npm run lint
-
-      - name: Run Format Check
-        run: npm run format:check
-
-      - name: Compile TypeScript
-        run: npm run build
-
-  build:
-    name: '2️⃣ CDK Synth & Build'
-    runs-on: self-hosted
-    timeout-minutes: 15
-    needs: compile
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Restore npm Cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: npm-${{ runner.os }}-
-
-      - name: Install Dependencies
-        run: npm ci --no-audit --prefer-offline
-
-      - name: CDK Synth
-        run: npx cdk synth
-
+  # Security and Code Quality Checks
   security-scan:
-    name: '3️⃣ Security Scan (npm, Trivy, Gitleaks)'
+    name: 'Security & Quality Checks'
     runs-on: self-hosted
-    timeout-minutes: 30
-    needs: build
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: System Cleanup
-        run: |
-          sudo pkill -f dpkg || true
-          sudo rm -rf /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock*
-          echo 'DPkg::Lock::Timeout "120";' | sudo tee /etc/apt/apt.conf.d/100-timeout
-          sudo apt-get update -y
-
-      - name: Install Essential Tools
-        run: |
-          sudo apt-get install -y \
-            ca-certificates curl wget unzip jq gnupg software-properties-common \
-            lsb-release apt-transport-https
-
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Install Node Dependencies
-        run: npm ci --no-audit --prefer-offline
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Run npm Audit
-        run: |
-          npm audit --omit=dev --audit-level=critical --json > npm-audit-results.json || true
-          if jq -e '.metadata.vulnerabilities.critical > 0' npm-audit-results.json; then
-            echo "CRITICAL_VULNERABILITIES=1" >> $GITHUB_ENV
-            exit 1
-          fi
-
-      - name: Install Trivy
-        run: |
-          wget -q https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz
-          tar zxvf trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz
-          sudo mv trivy /usr/local/bin/
-
-      - name: Cache Trivy DB
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/trivy
-          key: trivy-db-${{ env.TRIVY_VERSION }}
-          restore-keys: trivy-db-
-
-      - name: Run Trivy FS Scan
-        run: trivy fs --format sarif --output trivy-results.sarif .
-
-      - name: Run Gitleaks
+      # Git Secrets Scanning
+      - name: Run Gitleaks Scan
         uses: gitleaks/gitleaks-action@v2
-        with:
-          version: ${{ env.GITLEAKS_VERSION }}
-          config-path: .gitleaks.toml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
-      - name: Upload SARIF (Trivy)
+      # Dependency Vulnerability Scanning
+      - name: Run Trivy Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+
+      - name: Upload Trivy scan results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
+        if: always()
         with:
-          sarif_file: trivy-results.sarif
+          sarif_file: 'trivy-results.sarif'
 
-  deploy:
-    name: '4️⃣ Deploy (Placeholder)'
+      # NPM Audit
+      - name: Run NPM Security Audit
+        run: |
+          npm audit --audit-level=moderate
+          npm audit --output=json > npm-audit-results.json || true
+
+      # Code Quality with SonarQube
+      - name: SonarQube Scan
+        uses: sonarqube-quality-gate-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          scanMetadataReportFile: sonar-project.properties
+
+      # OWASP Dependency Check
+      - name: Run OWASP Dependency Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'astrazeneca-secure-s3-cdk'
+          path: '.'
+          format: 'ALL'
+          out: 'dependency-check-reports'
+          args: >
+            --enableRetired
+            --enableExperimental
+            --log4jConfigurationFile log4j2.xml
+
+      - name: Upload OWASP Dependency Check results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-check-reports
+          path: dependency-check-reports
+
+  # Linting and Formatting
+  code-quality:
+    name: 'Code Quality & Formatting'
     runs-on: self-hosted
     needs: security-scan
-    if: github.ref == 'refs/heads/main' || github.event.inputs.environment == 'prod'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Confirm Deployment
-        run: echo "🚀 Deployment would occur here to ${{ github.event.inputs.environment }}"
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Check Prettier formatting
+        run: npm run format:check
+
+      - name: Run TypeScript compiler check
+        run: npx tsc --noEmit
+
+      - name: Check for unused dependencies
+        run: npx depcheck --ignores="@types/*,eslint-*,prettier,jest,ts-jest,ts-node"
+
+  # Unit Testing
+  test:
+    name: 'Unit Tests & Coverage'
+    runs-on: self-hosted
+    needs: code-quality
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests with coverage
+        run: npm run test:coverage
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage/lcov.info
+          flags: unittests
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: |
+            coverage/
+            junit.xml
+
+  # CDK Synthesis and Validation
+  cdk-synth:
+    name: 'CDK Synthesis & Validation'
+    runs-on: self-hosted
+    needs: test
+    strategy:
+      matrix:
+        environment: [dev, prod]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install AWS CDK
+        run: npm install -g aws-cdk
+
+      - name: CDK Synthesis
+        run: cdk synth --context env=${{ matrix.environment }} --strict
+
+      - name: Upload CDK templates
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdk-templates-${{ matrix.environment }}
+          path: cdk.out/
+
+      - name: Validate CDK templates with cfn-lint
+        run: |
+          pip install cfn-lint
+          find cdk.out -name "*.template.json" -exec cfn-lint {} \;
