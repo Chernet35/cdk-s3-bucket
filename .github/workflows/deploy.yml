@@ -85,11 +85,10 @@ jobs:
           npm audit --json > npm-audit-results.json || true
 
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v1.0
-        with:
-          projectBaseDir: .
+        uses: SonarSource/sonarqube-scan-action@<action version> # Ex: v4.1.0, See the latest version at https://github.com/marketplace/actions/official-sonarqube-scan
         env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+         SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
 
       - name: Run OWASP Dependency Check
         uses: dependency-check/Dependency-Check_Action@main
