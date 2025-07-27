@@ -85,7 +85,7 @@ jobs:
           npm audit --json > npm-audit-results.json || true
 
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v1.1
+        uses: SonarSource/sonarqube-scan-action@v1.0
         with:
           projectBaseDir: .
         env:
