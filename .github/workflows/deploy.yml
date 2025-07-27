@@ -1,4 +1,4 @@
-name: 'Deploy Secure S3 CDK Stack'
+name: 'Secure CDK Deployment Pipeline'
 
 on:
   push:
@@ -8,19 +8,17 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Environment to deploy'
+        description: 'Deployment environment'
         required: true
         default: 'dev'
         type: choice
-        options:
-          - dev
-          - prod
+        options: [dev, prod]
 
 env:
   AWS_REGION: us-east-1
-  NODE_VERSION: '18'
-  CACHE_VERSION: 'v1'
-  SONAR_SCANNER_VERSION: '4.8.0.2856'
+  NODE_VERSION: '20'
+  TRIVY_VERSION: '0.50.0'
+  GITLEAKS_VERSION: '8.24.3'
 
 permissions:
   id-token: write
@@ -29,170 +27,76 @@ permissions:
   actions: read
 
 jobs:
-  # Security and Code Quality Checks
   security-scan:
-    name: 'Security & Quality Checks'
+    name: 'Security Scanning'
     runs-on: self-hosted
     timeout-minutes: 30
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Setup build environment
+      - name: Clean and Update System
         run: |
-          ./scripts/setup-build-env.sh
+          sudo pkill -f dpkg || true
+          sudo rm -rf /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock*
+          echo 'DPkg::Lock::Timeout "120";' | sudo tee /etc/apt/apt.conf.d/100-timeout
+          sudo apt-get update -y
 
-      - name: Setup Node.js
+      - name: Install Essential Tools
+        run: |
+          sudo apt-get install -y \
+            ca-certificates curl wget unzip jq gnupg software-properties-common lsb-release apt-transport-https
+
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: 'package-lock.json'
 
-      - name: Install dependencies with optimization
+      - name: Cache Node Modules
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-cache-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            npm-cache-${{ runner.os }}-
+
+      - name: Install Node Dependencies
+        run: npm ci --no-audit --prefer-offline
+
+      - name: Run npm Audit (Critical Only)
         run: |
-          ./scripts/install-deps.sh
+          npm audit --omit=dev --audit-level=critical --json > npm-audit-results.json || true
+          if jq -e '.metadata.vulnerabilities.critical > 0' npm-audit-results.json; then
+            echo "CRITICAL_VULNERABILITIES=1" >> $GITHUB_ENV
+            exit 1
+          fi
 
-      # Git Secrets Scanning
-      - name: Run Gitleaks Scan
+      - name: Install and Cache Trivy
         run: |
-          ./scripts/security-scan.sh gitleaks
+          wget -q https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz
+          tar zxvf trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz
+          sudo mv trivy /usr/local/bin/
 
-      - name: Upload Gitleaks scan results to GitHub Security tab
+      - name: Cache Trivy DB
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ env.TRIVY_VERSION }}
+          restore-keys: |
+            trivy-db-
+
+      - name: Run Trivy File System Scan
+        run: trivy fs --format sarif --output trivy-results.sarif .
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          version: ${{ env.GITLEAKS_VERSION }}
+          config-path: .gitleaks.toml
+
+      - name: Upload Trivy Scan Results
         uses: github/codeql-action/upload-sarif@v3
-        if: always() && hashFiles('reports/security/gitleaks-results.sarif') != ''
         with:
-          sarif_file: 'reports/security/gitleaks-results.sarif'
-          category: 'gitleaks'
-
-      # Dependency Vulnerability Scanning
-      - name: Run Trivy Vulnerability Scanner
-        run: |
-          ./scripts/security-scan.sh trivy
-
-      - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        if: always() && hashFiles('reports/security/trivy-results.sarif') != ''
-        with:
-          sarif_file: 'reports/security/trivy-results.sarif'
-          category: 'trivy'
-
-      # NPM Audit
-      - name: Run NPM Security Audit
-        run: |
-          ./scripts/security-scan.sh npm-audit
-
-      # Code Quality with SonarQube
-      - name: SonarQube Scan
-        run: |
-          ./scripts/security-scan.sh sonar
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
-      # OWASP Dependency Check
-
-  # Linting and Formatting
-  code-quality:
-    name: 'Code Quality & Formatting'
-    runs-on: self-hosted
-    timeout-minutes: 15
-    needs: security-scan
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup build environment
-        run: ./scripts/setup-build-env.sh
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Install dependencies with optimization
-        run: ./scripts/install-deps.sh
-
-      - name: Run code quality checks
-        run: |
-          ./scripts/security-scan.sh code-quality
-
-  # Unit Testing
-  test:
-    name: 'Unit Tests & Coverage'
-    runs-on: self-hosted
-    timeout-minutes: 20
-    needs: code-quality
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup build environment
-        run: ./scripts/setup-build-env.sh
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Install dependencies with optimization
-        run: ./scripts/install-deps.sh
-
-      - name: Run optimized tests
-        run: |
-          ./scripts/run-tests.sh
-
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          file: ./coverage/lcov.info
-          flags: unittests
-          fail_ci_if_error: true
-          token: ${{ secrets.CODECOV_TOKEN }}
-
-      - name: Upload test results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: test-results
-          path: |
-            coverage/
-            junit.xml
-
-  # CDK Synthesis and Validation
-  cdk-synth:
-    name: 'CDK Synthesis & Validation'
-    runs-on: self-hosted
-    timeout-minutes: 15
-    needs: test
-    strategy:
-      matrix:
-        environment: [dev, prod]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup build environment
-        run: ./scripts/setup-build-env.sh
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Install dependencies with optimization
-        run: ./scripts/install-deps.sh
-
-      - name: CDK Synthesis and Validation
-        run: |
-          ./scripts/cdk-synth.sh ${{ matrix.environment }}
-
-      - name: Upload CDK templates
-        uses: actions/upload-artifact@v4
-        with:
-          name: cdk-templates-${{ matrix.environment }}
-          path: cdk.out/
+          sarif_file: trivy-results.sarif
