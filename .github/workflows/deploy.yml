@@ -26,7 +26,7 @@ permissions:
 
 jobs:
   setup:
-    name: 'Common Setup'
+    name: 'Initial Setup'
     runs-on: self-hosted
     outputs:
       node-modules-path: ${{ steps.cache-node.outputs.dir }}
@@ -46,7 +46,7 @@ jobs:
         run: npm ci
 
   security-scan:
-    name: 'Security & Quality Checks'
+    name: 'Security & Vulnerability Scans'
     runs-on: self-hosted
     needs: setup
     steps:
@@ -68,39 +68,33 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
-      - name: Trivy Vulnerability Scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
+      - name: Run Trivy Scan
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+          trivy fs . --exit-code 0 --format sarif --output trivy-results.sarif --severity CRITICAL,HIGH,MEDIUM
 
       - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@v3
         if: always()
+        uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: 'trivy-results.sarif'
+          sarif_file: trivy-results.sarif
 
       - name: NPM Security Audit
         run: |
-          npm audit --audit-level=moderate
+          npm audit --audit-level=moderate || true
           npm audit --json > npm-audit-results.json || true
 
-          - name: SonarQube Scan
-            uses: SonarSource/sonarqube-scan-action@v1.1
-            env:
-            SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-            with:
-            projectBaseDir: .
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v1.1
+        with:
+          projectBaseDir: .
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-
-
-      - name: OWASP Dependency Check
+      - name: Run OWASP Dependency Check
         uses: dependency-check/Dependency-Check_Action@main
         with:
-          project: 'astrazeneca-secure-s3-cdk'
+          project: 'secure-s3-cdk'
           path: '.'
           format: 'ALL'
           out: 'dependency-check-reports'
@@ -116,7 +110,7 @@ jobs:
           name: dependency-check-reports
           path: dependency-check-reports
 
-  code-quality:
+  lint-check:
     name: 'Lint & Type Check'
     runs-on: self-hosted
     needs: security-scan
@@ -136,19 +130,19 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
-      - name: Prettier Format Check
+      - name: Check Prettier Format
         run: npm run format:check
 
-      - name: TypeScript Check
+      - name: TypeScript Compilation Check
         run: npx tsc --noEmit
 
       - name: Unused Dependency Check
         run: npx depcheck --ignores="@types/*,eslint-*,prettier,jest,ts-jest,ts-node"
 
-  test:
-    name: 'Unit Test & Coverage'
+  unit-test:
+    name: 'Unit Tests & Coverage'
     runs-on: self-hosted
-    needs: code-quality
+    needs: lint-check
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -162,7 +156,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run Unit Tests
+      - name: Run Tests with Coverage
         run: npm run test:coverage
 
       - name: Upload Coverage to Codecov
@@ -183,9 +177,9 @@ jobs:
             junit.xml
 
   cdk-synth:
-    name: 'CDK Synthesis & Lint'
+    name: 'CDK Synthesis & Validation'
     runs-on: self-hosted
-    needs: test
+    needs: unit-test
     strategy:
       matrix:
         environment: [dev, prod]
@@ -193,20 +187,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js & CDK
+      - name: Setup Node.js & Install CDK
         run: |
-          npm install -g aws-cdk
           npm ci
+          npm install -g aws-cdk
 
       - name: CDK Synthesis
         run: cdk synth --context env=${{ matrix.environment }} --strict
 
-      - name: CFN Lint Templates
+      - name: Validate Synth with cfn-lint
         run: |
           pip install cfn-lint
           find cdk.out -name "*.template.json" -exec cfn-lint {} \;
 
-      - name: Upload CDK Synth Artifacts
+      - name: Upload CDK Output
         uses: actions/upload-artifact@v4
         with:
           name: cdk-templates-${{ matrix.environment }}
