@@ -49,11 +49,9 @@ jobs:
       # Git Secrets Scanning
       - name: Run Gitleaks Scan
         uses: gitleaks/gitleaks-action@v2
-        with:
-         args: detect --source=. --report-path=gitleaks-report.json --no-git
         env:
-         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
       # Dependency Vulnerability Scanning
       - name: Run Trivy Vulnerability Scanner
@@ -204,7 +202,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cdk-templates-${{ matrix.environment }}
-          path: cdk.out/ 
+          path: cdk.out/
 
       - name: Validate CDK templates with cfn-lint
         run: |
