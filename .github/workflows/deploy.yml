@@ -27,16 +27,80 @@ permissions:
   actions: read
 
 jobs:
-  security-scan:
-    name: 'Security Scanning'
+  compile:
+    name: '1️⃣ Compile & Lint'
     runs-on: self-hosted
-    timeout-minutes: 30
+    timeout-minutes: 10
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Clean and Update System
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: npm-${{ runner.os }}-
+
+      - name: Install Dependencies
+        run: npm ci --no-audit --prefer-offline
+
+      - name: Run Lint
+        run: npm run lint
+
+      - name: Run Format Check
+        run: npm run format:check
+
+      - name: Compile TypeScript
+        run: npm run build
+
+  build:
+    name: '2️⃣ CDK Synth & Build'
+    runs-on: self-hosted
+    timeout-minutes: 15
+    needs: compile
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Restore npm Cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: npm-${{ runner.os }}-
+
+      - name: Install Dependencies
+        run: npm ci --no-audit --prefer-offline
+
+      - name: CDK Synth
+        run: npx cdk synth
+
+  security-scan:
+    name: '3️⃣ Security Scan (npm, Trivy, Gitleaks)'
+    runs-on: self-hosted
+    timeout-minutes: 30
+    needs: build
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: System Cleanup
         run: |
           sudo pkill -f dpkg || true
           sudo rm -rf /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock*
@@ -46,7 +110,8 @@ jobs:
       - name: Install Essential Tools
         run: |
           sudo apt-get install -y \
-            ca-certificates curl wget unzip jq gnupg software-properties-common lsb-release apt-transport-https
+            ca-certificates curl wget unzip jq gnupg software-properties-common \
+            lsb-release apt-transport-https
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -54,18 +119,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Cache Node Modules
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: npm-cache-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            npm-cache-${{ runner.os }}-
-
       - name: Install Node Dependencies
         run: npm ci --no-audit --prefer-offline
 
-      - name: Run npm Audit (Critical Only)
+      - name: Run npm Audit
         run: |
           npm audit --omit=dev --audit-level=critical --json > npm-audit-results.json || true
           if jq -e '.metadata.vulnerabilities.critical > 0' npm-audit-results.json; then
@@ -73,7 +130,7 @@ jobs:
             exit 1
           fi
 
-      - name: Install and Cache Trivy
+      - name: Install Trivy
         run: |
           wget -q https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz
           tar zxvf trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz
@@ -84,10 +141,9 @@ jobs:
         with:
           path: ~/.cache/trivy
           key: trivy-db-${{ env.TRIVY_VERSION }}
-          restore-keys: |
-            trivy-db-
+          restore-keys: trivy-db-
 
-      - name: Run Trivy File System Scan
+      - name: Run Trivy FS Scan
         run: trivy fs --format sarif --output trivy-results.sarif .
 
       - name: Run Gitleaks
@@ -96,7 +152,19 @@ jobs:
           version: ${{ env.GITLEAKS_VERSION }}
           config-path: .gitleaks.toml
 
-      - name: Upload Trivy Scan Results
+      - name: Upload SARIF (Trivy)
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results.sarif
+
+  deploy:
+    name: '4️⃣ Deploy (Placeholder)'
+    runs-on: self-hosted
+    needs: security-scan
+    if: github.ref == 'refs/heads/main' || github.event.inputs.environment == 'prod'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Confirm Deployment
+        run: echo "🚀 Deployment would occur here to ${{ github.event.inputs.environment }}"
