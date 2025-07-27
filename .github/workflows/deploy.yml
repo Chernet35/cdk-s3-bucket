@@ -96,10 +96,4 @@ jobs:
         with:
           sarif_file: 'trivy-results.sarif'
 
-      - name: SonarQube Analysis
-        uses: SonarSource/sonarqube-scan-action@v1.6.0
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
-
-
+     
