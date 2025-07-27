@@ -12,9 +12,7 @@ on:
         required: true
         default: 'dev'
         type: choice
-        options:
-          - dev
-          - prod
+        options: [dev, prod]
 
 env:
   AWS_REGION: us-east-1
@@ -27,12 +25,13 @@ permissions:
   actions: read
 
 jobs:
-  # Security and Code Quality Checks
-  security-scan:
-    name: 'Security & Quality Checks'
+  setup:
+    name: 'Common Setup'
     runs-on: self-hosted
+    outputs:
+      node-modules-path: ${{ steps.cache-node.outputs.dir }}
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -46,15 +45,30 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Git Secrets Scanning
+  security-scan:
+    name: 'Security & Quality Checks'
+    runs-on: self-hosted
+    needs: setup
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Run Gitleaks Scan
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
-      # Dependency Vulnerability Scanning
-      - name: Run Trivy Vulnerability Scanner
+      - name: Trivy Vulnerability Scanner
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
@@ -63,19 +77,17 @@ jobs:
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH,MEDIUM'
 
-      - name: Upload Trivy scan results to GitHub Security tab
+      - name: Upload Trivy SARIF
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: 'trivy-results.sarif'
 
-      # NPM Audit
-      - name: Run NPM Security Audit
+      - name: NPM Security Audit
         run: |
           npm audit --audit-level=moderate
-          npm audit --output=json > npm-audit-results.json || true
+          npm audit --json > npm-audit-results.json || true
 
-      # Code Quality with SonarQube
       - name: SonarQube Scan
         uses: sonarqube-quality-gate-action@master
         env:
@@ -83,8 +95,7 @@ jobs:
         with:
           scanMetadataReportFile: sonar-project.properties
 
-      # OWASP Dependency Check
-      - name: Run OWASP Dependency Check
+      - name: OWASP Dependency Check
         uses: dependency-check/Dependency-Check_Action@main
         with:
           project: 'astrazeneca-secure-s3-cdk'
@@ -96,16 +107,15 @@ jobs:
             --enableExperimental
             --log4jConfigurationFile log4j2.xml
 
-      - name: Upload OWASP Dependency Check results
+      - name: Upload OWASP Reports
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: dependency-check-reports
           path: dependency-check-reports
 
-  # Linting and Formatting
   code-quality:
-    name: 'Code Quality & Formatting'
+    name: 'Lint & Type Check'
     runs-on: self-hosted
     needs: security-scan
     steps:
@@ -124,18 +134,17 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
-      - name: Check Prettier formatting
+      - name: Prettier Format Check
         run: npm run format:check
 
-      - name: Run TypeScript compiler check
+      - name: TypeScript Check
         run: npx tsc --noEmit
 
-      - name: Check for unused dependencies
+      - name: Unused Dependency Check
         run: npx depcheck --ignores="@types/*,eslint-*,prettier,jest,ts-jest,ts-node"
 
-  # Unit Testing
   test:
-    name: 'Unit Tests & Coverage'
+    name: 'Unit Test & Coverage'
     runs-on: self-hosted
     needs: code-quality
     steps:
@@ -151,10 +160,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run unit tests with coverage
+      - name: Run Unit Tests
         run: npm run test:coverage
 
-      - name: Upload coverage reports to Codecov
+      - name: Upload Coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           file: ./coverage/lcov.info
@@ -162,7 +171,7 @@ jobs:
           fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
-      - name: Upload test results
+      - name: Upload Test Artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -171,9 +180,8 @@ jobs:
             coverage/
             junit.xml
 
-  # CDK Synthesis and Validation
   cdk-synth:
-    name: 'CDK Synthesis & Validation'
+    name: 'CDK Synthesis & Lint'
     runs-on: self-hosted
     needs: test
     strategy:
@@ -183,28 +191,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Install AWS CDK
-        run: npm install -g aws-cdk
+      - name: Setup Node.js & CDK
+        run: |
+          npm install -g aws-cdk
+          npm ci
 
       - name: CDK Synthesis
         run: cdk synth --context env=${{ matrix.environment }} --strict
 
-      - name: Upload CDK templates
+      - name: CFN Lint Templates
+        run: |
+          pip install cfn-lint
+          find cdk.out -name "*.template.json" -exec cfn-lint {} \;
+
+      - name: Upload CDK Synth Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: cdk-templates-${{ matrix.environment }}
           path: cdk.out/
-
-      - name: Validate CDK templates with cfn-lint
-        run: |
-          pip install cfn-lint
-          find cdk.out -name "*.template.json" -exec cfn-lint {} \;
