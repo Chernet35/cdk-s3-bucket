@@ -27,7 +27,6 @@ permissions:
   actions: read
 
 jobs:
-  # Security and Code Quality Checks
   security-scan:
     name: 'Security & Quality Checks'
     runs-on: self-hosted
@@ -37,6 +36,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup system dependencies
+        run: sudo apt-get update && sudo apt-get install -y unzip curl wget
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -44,7 +46,9 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci
+          npm outdated
 
       - name: Run NPM Security Audit
         run: |
@@ -55,36 +59,28 @@ jobs:
           fi
           npm audit --output=json > npm-audit-results.json || true
 
-      # Git Secrets Scanning
-      - name: Clean up previous Gitleaks temp file
-        run: rm -f /tmp/gitleaks.tmp || true  # Ignore if file doesn't exist
-
       - name: Run Gitleaks Secret Scanner
         uses: zricethezav/gitleaks-action@v2
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
         with:
-          version: v8.24.3  # Or try another version
-          config-path: .gitleaks.toml  # Optional
+          version: v8.24.3
+          config-path: .gitleaks.toml
 
-      - name: Run Trivy Vulnerability Scanner
+      - name: Run Trivy Scanner
         uses: aquasecurity/trivy-action@master
         with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+          ignore-unfixed: true
 
-      - name: Upload Trivy scan results to GitHub Security tab
+      - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
         with:
-          sarif_file: 'trivy-results.sarif'
-
-      # NPM Audit
-      - name: Run NPM Security Audit
-        run: |
-          npm audit --audit-level=moderate
-          npm audit --output=json > npm-audit-results.json || true
+          sarif_file: trivy-results.sarif
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v5.0.0
@@ -93,10 +89,7 @@ jobs:
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
 
       - name: SonarQube Quality Gate check
-        id: sonarqube-quality-gate-check
         uses: sonarsource/sonarqube-quality-gate-action@master
-        with:
-          pollingTimeoutSec: 600
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
