@@ -32,7 +32,7 @@ jobs:
   # Security and Code Quality Checks
   security-scan:
     name: 'Security & Quality Checks'
-    runs-on: [self-hosted, linux, security-scan]
+    runs-on: self-hosted
     timeout-minutes: 30
     steps:
       - name: Checkout code
@@ -103,7 +103,7 @@ jobs:
   # Linting and Formatting
   code-quality:
     name: 'Code Quality & Formatting'
-    runs-on: [self-hosted, linux, code-quality]
+    runs-on: self-hosted
     timeout-minutes: 15
     needs: security-scan
     steps:
@@ -130,7 +130,7 @@ jobs:
   # Unit Testing
   test:
     name: 'Unit Tests & Coverage'
-    runs-on: [self-hosted, linux, test]
+    runs-on: self-hosted
     timeout-minutes: 20
     needs: code-quality
     steps:
@@ -174,7 +174,7 @@ jobs:
   # CDK Synthesis and Validation
   cdk-synth:
     name: 'CDK Synthesis & Validation'
-    runs-on: [self-hosted, linux, cdk]
+    runs-on: self-hosted
     timeout-minutes: 15
     needs: test
     strategy:
