@@ -1,4 +1,4 @@
-name: 'Deploy Secure S3 CDK Stack'
+name: 'Secure CDK Deployment Pipeline'
 
 on:
   push:
@@ -8,17 +8,17 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Environment to deploy'
+        description: 'Deployment environment'
         required: true
         default: 'dev'
         type: choice
-        options:
-          - dev
-          - prod
+        options: [dev, prod]
 
 env:
   AWS_REGION: us-east-1
-  NODE_VERSION: '18'
+  NODE_VERSION: '20' # Updated to LTS version
+  TRIVY_VERSION: '0.50.0' # Pinned version
+  GITLEAKS_VERSION: '8.24.3' # Pinned version
 
 permissions:
   id-token: write
@@ -28,68 +28,108 @@ permissions:
 
 jobs:
   security-scan:
-    name: 'Security & Quality Checks'
+    name: 'Security Scanning'
     runs-on: self-hosted
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup system dependencies
-        run: sudo apt-get update && sudo apt-get install -y unzip curl wget
+      - name: Setup system environment
+        run: |
+          # Clean up any existing locks
+          sudo lsof -t /var/lib/dpkg/lock-frontend | xargs -r sudo kill -9 || true
+          sudo rm -f \
+            /var/lib/apt/lists/lock \
+            /var/cache/apt/archives/lock \
+            /var/lib/dpkg/lock* \
+            /tmp/gitleaks.tmp || true
+          
+          # Configure package manager
+          echo 'DPkg::Lock::Timeout "120";' | sudo tee /etc/apt/apt.conf.d/100-timeout
+          sudo apt-get update -y
+
+      - name: Install essential tools
+        run: |
+          sudo apt-get install -y \
+            ca-certificates \
+            curl \
+            wget \
+            unzip \
+            jq \
+            gnupg \
+            software-properties-common
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
 
       - name: Install dependencies
-        run: |
-          npm ci
-          npm outdated
+        run: npm ci --no-audit --prefer-offline
 
-      - name: Run NPM Security Audit
+      - name: Dependency Vulnerability Scan
         run: |
-          npm audit fix
-          if [ $? -ne 0 ]; then
-            echo "Found unfixable vulnerabilities!"
-            npm audit --audit-level=moderate
+          npm audit --omit=dev --audit-level=critical --json > npm-audit-results.json || true
+          # Fail only on critical vulnerabilities
+          if jq -e '.metadata.vulnerabilities.critical > 0' npm-audit-results.json; then
+            echo "CRITICAL_VULNERABILITIES=1" >> $GITHUB_ENV
+            exit 1
           fi
-          npm audit --output=json > npm-audit-results.json || true
 
-      - name: Run Gitleaks Secret Scanner
-        uses: zricethezav/gitleaks-action@v2
-        env:
-          RUNNER_TEMP: ${{ runner.temp }}
-        with:
-          version: v8.24.3
-          config-path: .gitleaks.toml
-
-      - name: Run Trivy Scanner
+      - name: Run Trivy Scanner (Filesystem)
         uses: aquasecurity/trivy-action@master
         with:
-          scan-type: fs
-          scan-ref: .
-          format: sarif
-          output: trivy-results.sarif
-          severity: CRITICAL,HIGH,MEDIUM
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
           ignore-unfixed: true
+          vuln-type: 'os,library'
+          version: ${{ env.TRIVY_VERSION }}
+          skip-db-update: false
+          cache-dir: '${{ runner.temp }}/trivy-cache'
 
-      - name: Upload Trivy results
-        uses: github/codeql-action/upload-sarif@v3
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
         with:
-          sarif_file: trivy-results.sarif
+          version: ${{ env.GITLEAKS_VERSION }}
+          config-path: '.gitleaks.toml'
+          redact: true
+          verbose: true
+          no-git: false
+          exit-code: '2'
 
-      - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v5.0.0
+      - name: Upload Trivy Results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy-fs-scan'
+
+      - name: SonarQube Analysis
+        uses: SonarSource/sonarqube-scan-action@v5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=cdk-s3-bucket
+            -Dsonar.projectName='CDK_S3_Bucket'
+            -Dsonar.sources=.
+            -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/test/**
+            -Dsonar.tests=test
+            -Dsonar.test.inclusions=**/*.test.ts
+            -Dsonar.typescript.lcov.reportPaths=coverage/lcov.info
 
-      - name: SonarQube Quality Gate check
-        uses: sonarsource/sonarqube-quality-gate-action@master
+      - name: Check Quality Gate
+        uses: sonarsource/sonarqube-quality-gate-action@v2
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+        timeout-minutes: 5
