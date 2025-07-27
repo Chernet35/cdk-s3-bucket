@@ -30,7 +30,7 @@ jobs:
   # Security and Code Quality Checks
   security-scan:
     name: 'Security & Quality Checks'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
