@@ -17,6 +17,7 @@ on:
 env:
   AWS_REGION: us-east-1
   NODE_VERSION: '18'
+  DEPENDENCY_CHECK_VERSION: '8.4.0'
 
 permissions:
   id-token: write
@@ -69,15 +70,17 @@ jobs:
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
       - name: Run Trivy Scan
+        id: trivy-scan
         run: |
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
           trivy fs . --exit-code 0 --format sarif --output trivy-results.sarif --severity CRITICAL,HIGH,MEDIUM
+          echo "SARIF_FILE=$(pwd)/trivy-results.sarif" >> $GITHUB_ENV
 
       - name: Upload Trivy SARIF
-        if: always()
+        if: steps.trivy-scan.outcome == 'success' && env.SARIF_FILE != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: trivy-results.sarif
+          sarif_file: ${{ env.SARIF_FILE }}
 
       - name: NPM Security Audit
         run: |
@@ -99,24 +102,31 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
 
+      - name: Setup OWASP Dependency Check
+        run: |
+          mkdir -p dependency-check-reports
+          wget https://github.com/jeremylong/DependencyCheck/releases/download/v${{ env.DEPENDENCY_CHECK_VERSION }}/dependency-check-${{ env.DEPENDENCY_CHECK_VERSION }}-release.zip
+          unzip dependency-check-${{ env.DEPENDENCY_CHECK_VERSION }}-release.zip -d dependency-check
+          rm dependency-check-${{ env.DEPENDENCY_CHECK_VERSION }}-release.zip
+
       - name: Run OWASP Dependency Check
-        uses: dependency-check/Dependency-Check_Action@main
-        with:
-          project: 'secure-s3-cdk'
-          path: '.'
-          format: 'ALL'
-          out: 'dependency-check-reports'
-          args: >
-            --enableRetired
-            --enableExperimental
-            --log4jConfigurationFile log4j2.xml
+        run: |
+          ./dependency-check/bin/dependency-check.sh \
+            --project "secure-s3-cdk" \
+            --scan "." \
+            --out "dependency-check-reports" \
+            --format "ALL" \
+            --enableRetired \
+            --enableExperimental \
+            --log dependency-check-reports/dependency-check.log
 
       - name: Upload OWASP Reports
+        if: success() || failure()
         uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: dependency-check-reports
-          path: dependency-check-reports
+          path: dependency-check-reports/*
+          retention-days: 7
 
   lint-check:
     name: 'Lint & Type Check'
