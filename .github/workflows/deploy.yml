@@ -1,258 +1,406 @@
-name: Secure S3 Bucket - Optimized CI/CD Pipeline
+name: 'Deploy Secure S3 CDK Stack'
 
 on:
   push:
-    branches:
-      - main
-      - develop
-    paths:
-      - 'src/**'
-      - 'lib/**'
-      - 'package.json'
-      - 'cdk.json'
+    branches: [main, develop]
   pull_request:
-    branches:
-      - main
-      - develop
+    branches: [main]
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Environment to deploy to'
+        description: 'Environment to deploy'
         required: true
         default: 'dev'
         type: choice
         options:
           - dev
-          - staging
           - prod
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   AWS_REGION: us-east-1
-  NODE_VERSION: '20.x'
-  PROJECT_ID: 'secure-s3-bucket'
-  CDK_VERSION: '2.x'
+  NODE_VERSION: '18'
 
 permissions:
   id-token: write
   contents: read
   security-events: write
-  pull-requests: write
+  actions: read
 
 jobs:
-  setup:
-    name: Setup & Validation
+  # Security and Code Quality Checks
+  security-scan:
+    name: 'Security & Quality Checks'
     runs-on: self-hosted
-    outputs:
-      node_cache_key: ${{ steps.node-cache.outputs.cache-key }}
-      build_artifacts: ${{ steps.build.outputs.artifacts }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: false
 
       - name: Setup Node.js
-        id: node-cache
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: 'package-lock.json'
 
       - name: Install dependencies
+        run: npm ci
+
+      # Git Secrets Scanning
+      - name: Run Gitleaks Scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+      # Dependency Vulnerability Scanning
+      - name: Run Trivy Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      # NPM Audit
+      - name: Run NPM Security Audit
         run: |
-          npm ci --no-audit --prefer-offline
-          npm cache clean --force
+          npm audit --audit-level=moderate
+          npm audit --output=json > npm-audit-results.json || true
 
-      - name: Build project
-        id: build
-        run: |
-          npm run build
-          echo "artifacts=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+      # Code Quality with SonarQube
+      - name: SonarQube Scan
+        uses: sonarqube-quality-gate-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          scanMetadataReportFile: sonar-project.properties
 
-      - name: Verify CDK installation
-        run: npx cdk --version
+      # OWASP Dependency Check
+      - name: Run OWASP Dependency Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'astrazeneca-secure-s3-cdk'
+          path: '.'
+          format: 'ALL'
+          out: 'dependency-check-reports'
+          args: >
+            --enableRetired
+            --enableExperimental
+            --log4jConfigurationFile log4j2.xml
 
-  security:
-    name: Security Scanning
+      - name: Upload OWASP Dependency Check results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-check-reports
+          path: dependency-check-reports
+
+  # Linting and Formatting
+  code-quality:
+    name: 'Code Quality & Formatting'
     runs-on: self-hosted
-    needs: setup
+    needs: security-scan
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Restore Node.js cache
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: 'package-lock.json'
 
-      - name: Run security scans
-        uses: ./.github/actions/security-scans
-        with:
-          project_id: ${{ env.PROJECT_ID }}
-          aws_region: ${{ env.AWS_REGION }}
+      - name: Install dependencies
+        run: npm ci
 
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Check Prettier formatting
+        run: npm run format:check
+
+      - name: Run TypeScript compiler check
+        run: npx tsc --noEmit
+
+      - name: Check for unused dependencies
+        run: npx depcheck --ignores="@types/*,eslint-*,prettier,jest,ts-jest,ts-node"
+
+  # Unit Testing
   test:
-    name: Run Tests
+    name: 'Unit Tests & Coverage'
     runs-on: self-hosted
-    needs: [setup, security]
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-        node: [18, 20]
+    needs: code-quality
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node }}
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: 'package-lock.json'
 
-      - name: Run unit tests
-        run: |
-          npm ci
-          npm test -- --coverage --watchAll=false --maxWorkers=2
-          npx nyc report --reporter=lcov
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Upload coverage
+      - name: Run unit tests with coverage
+        run: npm run test:coverage
+
+      - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v4
         with:
+          file: ./coverage/lcov.info
+          flags: unittests
+          fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage/lcov.info
-          flags: unittests-${{ matrix.node }}
 
-  synth:
-    name: CDK Synthesis
-    runs-on: self-hosted
-    needs: [security, test]
-    outputs:
-      templates: ${{ steps.synth.outputs.templates }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: 'package-lock.json'
-
-      - name: Synthesize templates
-        id: synth
-        run: |
-          npm ci
-          npx cdk synth --quiet --all \
-            --context projectId=${{ env.PROJECT_ID }} \
-            --context environment=dev \
-            --context githubRepo=${{ github.repository }} \
-            --output cdk.out
-          
-          echo "templates=cdk.out" >> $GITHUB_OUTPUT
-
-      - name: Upload artifacts
+      - name: Upload test results
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: cdk-templates
-          path: cdk.out/
-          retention-days: 1
+          name: test-results
+          path: |
+            coverage/
+            junit.xml
 
-  deploy:
-    name: Deploy to ${{ inputs.environment || 'dev' }}
+  # CDK Synthesis and Validation
+  cdk-synth:
+    name: 'CDK Synthesis & Validation'
     runs-on: self-hosted
-    needs: synth
-    environment:
-      name: ${{ inputs.environment || 'dev' }}
-      url: https://console.aws.amazon.com/s3/
+    needs: test
     strategy:
       matrix:
-        environment: ['dev', 'staging', 'prod']
-        include:
-          - environment: dev
-            role: github-oidc-role-dev
-            approval: never
-          - environment: staging
-            role: github-oidc-role-staging
-            approval: any-change
-          - environment: prod
-            role: github-oidc-role-prod
-            approval: broadened
-    if: |
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == matrix.environment) ||
-      (github.ref == 'refs/heads/develop' && matrix.environment == 'dev') ||
-      (github.ref == 'refs/heads/main' && matrix.environment != 'prod') ||
-      (github.event_name == 'release' && matrix.environment == 'prod')
+        environment: [dev, prod]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: cdk-templates
-          path: cdk.out
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: 'package-lock.json'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install AWS CDK
+        run: npm install -g aws-cdk
+
+      - name: CDK Synthesis
+        run: cdk synth --context env=${{ matrix.environment }} --strict
+
+      - name: Upload CDK templates
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdk-templates-${{ matrix.environment }}
+          path: cdk.out/
+
+      - name: Validate CDK templates with cfn-lint
+        run: |
+          pip install cfn-lint
+          find cdk.out -name "*.template.json" -exec cfn-lint {} \;
+
+  # Development Deployment
+  deploy-dev:
+    name: 'Deploy to Development'
+    runs-on: self-hosted
+    needs: cdk-synth
+    if: github.ref == 'refs/heads/develop' || github.event_name == 'workflow_dispatch'
+    environment:
+      name: development
+      url: https://console.aws.amazon.com/s3/
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ matrix.role }}
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_DEV }}
+          role-session-name: GitHubActions-Dev-Deployment
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: GitHub-${{ matrix.environment }}-${{ github.run_id }}
-          mask-aws-account-id: true
 
-      - name: CDK Deploy
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install AWS CDK
+        run: npm install -g aws-cdk
+
+      - name: CDK Bootstrap (if needed)
         run: |
-          npm ci
-          npx cdk deploy --all \
-            --require-approval ${{ matrix.approval }} \
-            --context projectId=${{ env.PROJECT_ID }} \
-            --context environment=${{ matrix.environment }} \
-            --context githubRepo=${{ github.repository }} \
-            --outputs-file cdk-outputs.json
+          if ! aws cloudformation describe-stacks --stack-name CDKToolkit --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            cdk bootstrap aws://${{ secrets.AWS_ACCOUNT_ID }}/${{ env.AWS_REGION }}
+          fi
 
-      - name: Store outputs
-        if: success()
-        run: |
-          echo "DEPLOY_OUTPUTS=$(jq -c . cdk-outputs.json)" >> $GITHUB_ENV
-          echo "Bucket created successfully in ${{ matrix.environment }}"
+      - name: CDK Diff
+        run: cdk diff --context env=dev --fail
 
-      - name: Post-deployment tests
-        run: |
-          BUCKET_NAME=$(jq -r '.[] | select(.bucketName) | .bucketName' cdk-outputs.json)
-          aws s3api head-bucket --bucket $BUCKET_NAME || exit 1
-          aws s3api get-bucket-encryption --bucket $BUCKET_NAME
+      - name: CDK Deploy Development
+        run: cdk deploy --all --context env=dev --require-approval never --outputs-file dev-outputs.json
 
-  notify:
-    name: Notification
-    runs-on: self-hosted
-    needs: deploy
-    if: always()
-    steps:
-      - name: Slack notification
-        uses: slackapi/slack-github-action@v1.25.0
+      - name: Upload deployment outputs
+        uses: actions/upload-artifact@v4
         with:
-          channel-id: ${{ secrets.SLACK_CHANNEL }}
-          slack-message: |
-            Deployment ${{ job.status }} for ${{ env.PROJECT_ID }} (${{ needs.deploy.result }})
-            Environment: ${{ needs.deploy.inputs.environment || 'dev' }}
+          name: dev-deployment-outputs
+          path: dev-outputs.json
+
+      - name: Post-deployment validation
+        run: |
+          echo "Validating S3 bucket deployment..."
+          BUCKET_NAME=$(jq -r '.["AstraZeneca-SecureBucket-dev"].BucketName' dev-outputs.json)
+          aws s3api head-bucket --bucket "$BUCKET_NAME"
+          echo "✅ S3 bucket $BUCKET_NAME exists and is accessible"
+
+  # Production Deployment with Manual Approval
+  deploy-prod:
+    name: 'Deploy to Production'
+    runs-on: self-hosted
+    needs: [cdk-synth, deploy-dev]
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod')
+    environment:
+      name: production
+      url: https://console.aws.amazon.com/s3/
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_PROD }}
+          role-session-name: GitHubActions-Prod-Deployment
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install AWS CDK
+        run: npm install -g aws-cdk
+
+      - name: CDK Bootstrap (if needed)
+        run: |
+          if ! aws cloudformation describe-stacks --stack-name CDKToolkit --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            cdk bootstrap aws://${{ secrets.AWS_ACCOUNT_ID }}/${{ env.AWS_REGION }}
+          fi
+
+      - name: CDK Diff Production
+        id: cdk-diff
+        run: |
+          cdk diff --context env=prod > prod-diff.txt
+          if [ -s prod-diff.txt ]; then
+            echo "changes_detected=true" >> $GITHUB_OUTPUT
+            echo "Changes detected in production stack:"
+            cat prod-diff.txt
+          else
+            echo "changes_detected=false" >> $GITHUB_OUTPUT
+            echo "No changes detected in production stack"
+          fi
+
+      - name: Validate authorized changes
+        if: steps.cdk-diff.outputs.changes_detected == 'true'
+        run: |
+          # Check for unauthorized changes (customize as needed)
+          if grep -q "AWS::IAM::Role.*DELETE" prod-diff.txt || grep -q "AWS::S3::Bucket.*DELETE" prod-diff.txt; then
+            echo "❌ Unauthorized destructive changes detected!"
+            echo "Please review the changes and ensure they are intentional:"
+            cat prod-diff.txt
+            exit 1
+          fi
+          echo "✅ Changes appear to be authorized"
+
+      - name: CDK Deploy Production
+        run: cdk deploy --all --context env=prod --require-approval never --outputs-file prod-outputs.json
+
+      - name: Upload deployment outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-deployment-outputs
+          path: prod-outputs.json
+
+      - name: Post-deployment validation
+        run: |
+          echo "Validating S3 bucket deployment..."
+          BUCKET_NAME=$(jq -r '.["AstraZeneca-SecureBucket-prod"].BucketName' prod-outputs.json)
+          aws s3api head-bucket --bucket "$BUCKET_NAME"
+          aws s3api get-bucket-encryption --bucket "$BUCKET_NAME"
+          aws s3api get-bucket-versioning --bucket "$BUCKET_NAME"
+          echo "✅ S3 bucket $BUCKET_NAME is properly configured"
+
+      - name: Create deployment summary
+        run: |
+          echo "## 🚀 Production Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deployed Resources:" >> $GITHUB_STEP_SUMMARY
+          echo "- **S3 Bucket**: $(jq -r '.["AstraZeneca-SecureBucket-prod"].BucketName' prod-outputs.json)" >> $GITHUB_STEP_SUMMARY
+          echo "- **KMS Key**: $(jq -r '.["AstraZeneca-SecureBucket-prod"].EncryptionKeyArn' prod-outputs.json)" >> $GITHUB_STEP_SUMMARY
+          echo "- **OIDC Role**: $(jq -r '.["AstraZeneca-SecureBucket-prod"].GitHubOidcRoleArn' prod-outputs.json)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deployment Details:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: Production" >> $GITHUB_STEP_SUMMARY
+          echo "- **AWS Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployed by**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+
+  # Cleanup and Monitoring
+  post-deployment:
+    name: 'Post-Deployment Tasks'
+    runs-on: self-hosted
+    needs: [deploy-dev, deploy-prod]
+    if: always() && (needs.deploy-dev.result == 'success' || needs.deploy-prod.result == 'success')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_DEV }}
+          role-session-name: GitHubActions-Post-Deployment
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup monitoring alerts
+        run: |
+          echo "Setting up CloudWatch alarms and monitoring..."
+          # Add your monitoring setup commands here
+          # Example: Create CloudWatch alarms for S3 bucket metrics
+
+      - name: Cleanup old CDK assets
+        run: |
+          echo "Cleaning up old CDK assets..."
+          # Clean up old CDK staging assets if needed
+          # aws s3 rm s3://cdk-staging-bucket/old-assets/ --recursive
+
+      - name: Send notification
+        uses: 8398a7/action-slack@v3
+        if: always()
+        with:
+          status: ${{ job.status }}
+          channel: '#devops-notifications'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          message: |
+            Deployment Status: ${{ job.status }}
+            Repository: ${{ github.repository }}
+            Branch: ${{ github.ref_name }}
             Commit: ${{ github.sha }}
-            Link: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+            Actor: ${{ github.actor }}
