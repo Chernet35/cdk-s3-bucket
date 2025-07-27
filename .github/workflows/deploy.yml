@@ -116,7 +116,7 @@ jobs:
         run: npm ci
 
       - name: Run ESLint
-        run: npm run lint
+        run: npx eslint .
 
       - name: Check Prettier formatting
         run: npm run format:check
