@@ -48,42 +48,39 @@ jobs:
 
       - name: Run NPM Security Audit
         run: |
-         npm audit fix
-         if [ $? -ne 0 ]; then
-         echo "Found unfixable vulnerabilities!"
-         npm audit --audit-level=moderate
-         fi
-         npm audit --output=json > npm-audit-results.json || true
+          npm audit fix
+          if [ $? -ne 0 ]; then
+            echo "Found unfixable vulnerabilities!"
+            npm audit --audit-level=moderate
+          fi
+          npm audit --output=json > npm-audit-results.json || true
 
       # Git Secrets Scanning
-      - name: Run Gitleaks Scan
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
-          
-      - name: Clean up previous Gitleaks temp file (if any)
-        run: rm -f /tmp/gitleaks.tmp
+      - name: Clean up previous Gitleaks temp file
+        run: rm -f /tmp/gitleaks.tmp || true  # Ignore if file doesn't exist
 
+      - name: Run Gitleaks Secret Scanner
+        uses: zricethezav/gitleaks-action@v2
+        with:
+          version: v8.24.3  # Or try another version
+          config-path: .gitleaks.toml  # Optional
 
-        steps:
-        - uses: actions/checkout@v4
-        - name: Trivy Installation
-          run: |
-           sudo apt-get install -y wget apt-transport-https gnupg lsb-release
-           wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
-           echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee -a /etc/apt/sources.list.d/trivy.list
-           sudo apt-get update -y
-           sudo apt-get install -y trivy
+      - name: Trivy Installation
+        run: |
+          sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update -y
+          sudo apt-get install -y trivy
 
       - name: Trivy FS Scan
         run: trivy fs --format table -o fs-report.json .
 
       - name: Gitleaks Installation
         run: sudo apt install gitleaks -y
+
       - name: Gitleaks Code Scan
         run: gitleaks detect source . -r gitleaks-report.json -f json
-
 
       # NPM Audit
       - name: Run NPM Security Audit
@@ -92,17 +89,16 @@ jobs:
           npm audit --output=json > npm-audit-results.json || true
 
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v5.0.0 # Ex: v4.1.0, See the latest version at https://github.com/marketplace/actions/official-sonarqube-scan
+        uses: SonarSource/sonarqube-scan-action@v5.0.0
         env:
-         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-         SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
-        
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+
       - name: SonarQube Quality Gate check
         id: sonarqube-quality-gate-check
         uses: sonarsource/sonarqube-quality-gate-action@master
         with:
-         pollingTimeoutSec: 600
+          pollingTimeoutSec: 600
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
-      
