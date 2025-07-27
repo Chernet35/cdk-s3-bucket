@@ -63,6 +63,13 @@ jobs:
           chmod +x scripts/security-scan.sh
           ./scripts/security-scan.sh gitleaks
 
+      - name: Upload Gitleaks scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('reports/security/gitleaks-results.sarif') != ''
+        with:
+          sarif_file: 'reports/security/gitleaks-results.sarif'
+          category: 'gitleaks'
+
       # Dependency Vulnerability Scanning
       - name: Run Trivy Vulnerability Scanner
         run: |
@@ -70,9 +77,10 @@ jobs:
 
       - name: Upload Trivy scan results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: always() && hashFiles('reports/security/trivy-results.sarif') != ''
         with:
-          sarif_file: 'trivy-results.sarif'
+          sarif_file: 'reports/security/trivy-results.sarif'
+          category: 'trivy'
 
       # NPM Audit
       - name: Run NPM Security Audit
@@ -98,8 +106,14 @@ jobs:
         if: always()
         with:
           name: dependency-check-reports
-          path: dependency-check-reports
+          path: reports/security/owasp/
 
+      - name: Upload Semgrep scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('reports/security/semgrep-results.sarif') != ''
+        with:
+          sarif_file: 'reports/security/semgrep-results.sarif'
+          category: 'semgrep'
   # Linting and Formatting
   code-quality:
     name: 'Code Quality & Formatting'
@@ -130,7 +144,7 @@ jobs:
   # Unit Testing
   test:
     name: 'Unit Tests & Coverage'
-    runs-on: self-hosted
+    runs-on: [self-hosted, linux, test]
     timeout-minutes: 20
     needs: code-quality
     steps:
