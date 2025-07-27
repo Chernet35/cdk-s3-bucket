@@ -88,12 +88,14 @@ jobs:
           npm audit --audit-level=moderate
           npm audit --json > npm-audit-results.json || true
 
-      - name: SonarQube Scan
-        uses: sonarqube-quality-gate-action@master
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        with:
-          scanMetadataReportFile: sonar-project.properties
+          - name: SonarQube Scan
+            uses: SonarSource/sonarqube-scan-action@v1.1
+            env:
+            SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+            with:
+            projectBaseDir: .
+
+
 
       - name: OWASP Dependency Check
         uses: dependency-check/Dependency-Check_Action@main
