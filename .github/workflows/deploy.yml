@@ -27,6 +27,10 @@ permissions:
   actions: read
 
 jobs:
+
+  #############################################
+  # Security Scanning (Trivy + npm audit)
+  #############################################
   security-scan:
     name: 'Security Scanning'
     runs-on: self-hosted
@@ -36,20 +40,15 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Clean & Update System
+      - name: Setup System Tools
         run: |
           sudo pkill -f dpkg || true
           sudo rm -rf /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock*
           echo 'DPkg::Lock::Timeout "120";' | sudo tee /etc/apt/apt.conf.d/100-timeout
           sudo apt-get update -y
+          sudo apt-get install -y ca-certificates curl wget unzip jq gnupg software-properties-common lsb-release apt-transport-https tar
 
-      - name: Install Essential Tools
-        run: |
-          sudo apt-get install -y \
-            ca-certificates curl wget unzip jq gnupg software-properties-common \
-            lsb-release apt-transport-https tar
-
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -59,18 +58,23 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: npm-cache-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
-            npm-cache-${{ runner.os }}-
+            npm-${{ runner.os }}-
 
       - name: Install Dependencies
         run: npm ci --no-audit --prefer-offline
 
-      - name: Run npm Audit (Critical Only)
+      - name: Install ESLint React Hooks Plugin (if missing)
+        run: |
+          if ! npm list --depth=0 eslint-plugin-react-hooks &>/dev/null; then
+            npm install --save-dev eslint-plugin-react-hooks
+          fi
+
+      - name: Run npm Audit
         run: |
           npm audit --omit=dev --audit-level=critical --json > npm-audit-results.json || true
           if jq -e '.metadata.vulnerabilities.critical > 0' npm-audit-results.json; then
-            echo "CRITICAL_VULNERABILITIES=1" >> $GITHUB_ENV
             echo "Critical vulnerabilities found!"
             exit 1
           fi
@@ -89,21 +93,24 @@ jobs:
           restore-keys: |
             trivy-db-
 
-      - name: Run Trivy FS Scan
-        run: |
-          trivy fs --exit-code 1 --severity CRITICAL,HIGH --format sarif --output trivy-results.sarif .
+      - name: Run Trivy Scan
+        run: trivy fs --exit-code 1 --severity CRITICAL,HIGH --format sarif --output trivy-results.sarif .
 
       - name: Upload Trivy Scan Results
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results.sarif
-          # Linting and Formatting
+
+  #############################################
+  # Linting & Formatting
+  #############################################
   code-quality:
     name: 'Code Quality & Formatting'
     runs-on: self-hosted
     needs: security-scan
+
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -112,28 +119,31 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: npm ci
 
       - name: Run ESLint
-        run: npx eslint .
+        run: npx eslint . --ext .ts,.tsx
 
-      - name: Check Prettier formatting
+      - name: Run Prettier Check
         run: npm run format:check
 
-      - name: Run TypeScript compiler check
+      - name: TypeScript Compilation Check
         run: npx tsc --noEmit
 
-      - name: Check for unused dependencies
+      - name: Detect Unused Dependencies
         run: npx depcheck --ignores="@types/*,eslint-*,prettier,jest,ts-jest,ts-node"
 
-  # Unit Testing
+  #############################################
+  # Unit Testing & Coverage
+  #############################################
   test:
     name: 'Unit Tests & Coverage'
     runs-on: self-hosted
     needs: code-quality
+
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -142,13 +152,13 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: npm ci
 
-      - name: Run unit tests with coverage
+      - name: Run Unit Tests
         run: npm run test:coverage
 
-      - name: Upload coverage reports to Codecov
+      - name: Upload Code Coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           file: ./coverage/lcov.info
@@ -156,7 +166,7 @@ jobs:
           fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
-      - name: Upload test results
+      - name: Upload Test Results Artifact
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -164,8 +174,3 @@ jobs:
           path: |
             coverage/
             junit.xml
-
-
-
-    
-
