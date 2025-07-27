@@ -49,9 +49,11 @@ jobs:
       # Git Secrets Scanning
       - name: Run Gitleaks Scan
         uses: gitleaks/gitleaks-action@v2
+        with:
+         args: detect --source=. --report-path=gitleaks-report.json --no-git
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 
       # Dependency Vulnerability Scanning
       - name: Run Trivy Vulnerability Scanner
