@@ -97,13 +97,13 @@ jobs:
           sarif_file: 'trivy-results.sarif'
 
       - name: SonarQube Analysis
-        uses: SonarSource/sonarqube-scan-action@v1.8.0
+        uses: SonarSource/sonarqube-scan-action@v1.6.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
 
       - name: Check Quality Gate
-        uses: sonarsource/sonarqube-quality-gate-action@v2.0.0
+        uses: sonarsource/sonarqube-quality-gate-action@v1.9.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
