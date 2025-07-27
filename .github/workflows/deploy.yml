@@ -1,4 +1,4 @@
-name: 'Deploy Secure S3 CDK Stack'
+name: 'Secure S3 CDK Deployment Pipeline'
 
 on:
   push:
@@ -17,7 +17,9 @@ on:
 env:
   AWS_REGION: us-east-1
   NODE_VERSION: '18'
+  GITLEAKS_VERSION: '8.24.3'
   DEPENDENCY_CHECK_VERSION: '8.4.0'
+  TRIVY_VERSION: '0.50.1'
 
 permissions:
   id-token: write
@@ -47,7 +49,7 @@ jobs:
         run: npm ci
 
   security-scan:
-    name: 'Security & Vulnerability Scans'
+    name: 'Security Scans'
     runs-on: self-hosted
     needs: setup
     steps:
@@ -63,18 +65,39 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Gitleaks (Direct Download)
+        run: |
+          mkdir -p ~/.gitleaks
+          curl -sSL https://github.com/zricethezav/gitleaks/releases/download/v${{ env.GITLEAKS_VERSION }}/gitleaks_${{ env.GITLEAKS_VERSION }}_linux_x64.tar.gz \
+            -o ~/.gitleaks/gitleaks.tar.gz
+          tar -xzf ~/.gitleaks/gitleaks.tar.gz -C ~/.gitleaks
+          chmod +x ~/.gitleaks/gitleaks
+          echo "$HOME/.gitleaks" >> $GITHUB_PATH
+
       - name: Run Gitleaks Scan
-        uses: gitleaks/gitleaks-action@v2
+        run: |
+          gitleaks detect --source=. --report-path=gitleaks-report.json --report-format=json --verbose
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+      - name: Upload Gitleaks Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gitleaks-report
+          path: gitleaks-report.json
+
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | \
+            sh -s -- -b /usr/local/bin v${{ env.TRIVY_VERSION }}
 
       - name: Run Trivy Scan
         id: trivy-scan
         run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-          trivy fs . --exit-code 0 --format sarif --output trivy-results.sarif --severity CRITICAL,HIGH,MEDIUM
-          echo "SARIF_FILE=$(pwd)/trivy-results.sarif" >> $GITHUB_ENV
+          mkdir -p security-reports
+          trivy fs . --exit-code 0 --format sarif --output security-reports/trivy-results.sarif --severity CRITICAL,HIGH,MEDIUM
+          echo "SARIF_FILE=$(pwd)/security-reports/trivy-results.sarif" >> $GITHUB_ENV
 
       - name: Upload Trivy SARIF
         if: steps.trivy-scan.outcome == 'success' && env.SARIF_FILE != ''
@@ -85,7 +108,7 @@ jobs:
       - name: NPM Security Audit
         run: |
           npm audit --audit-level=moderate || true
-          npm audit --json > npm-audit-results.json || true
+          npm audit --json > security-reports/npm-audit-results.json || true
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v5.0.0
@@ -104,28 +127,29 @@ jobs:
 
       - name: Setup OWASP Dependency Check
         run: |
-          mkdir -p dependency-check-reports
-          wget https://github.com/jeremylong/DependencyCheck/releases/download/v${{ env.DEPENDENCY_CHECK_VERSION }}/dependency-check-${{ env.DEPENDENCY_CHECK_VERSION }}-release.zip
-          unzip dependency-check-${{ env.DEPENDENCY_CHECK_VERSION }}-release.zip -d dependency-check
-          rm dependency-check-${{ env.DEPENDENCY_CHECK_VERSION }}-release.zip
+          mkdir -p dependency-check
+          wget -q https://github.com/jeremylong/DependencyCheck/releases/download/v${{ env.DEPENDENCY_CHECK_VERSION }}/dependency-check-${{ env.DEPENDENCY_CHECK_VERSION }}-release.zip -O dependency-check.zip
+          unzip -q dependency-check.zip -d dependency-check
+          rm dependency-check.zip
 
       - name: Run OWASP Dependency Check
         run: |
+          mkdir -p security-reports/dependency-check
           ./dependency-check/bin/dependency-check.sh \
             --project "secure-s3-cdk" \
             --scan "." \
-            --out "dependency-check-reports" \
+            --out "security-reports/dependency-check" \
             --format "ALL" \
             --enableRetired \
             --enableExperimental \
-            --log dependency-check-reports/dependency-check.log
+            --log security-reports/dependency-check.log
 
-      - name: Upload OWASP Reports
-        if: success() || failure()
+      - name: Upload Security Reports
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: dependency-check-reports
-          path: dependency-check-reports/*
+          name: security-reports
+          path: security-reports/*
           retention-days: 7
 
   lint-check:
@@ -158,7 +182,7 @@ jobs:
         run: npx depcheck --ignores="@types/*,eslint-*,prettier,jest,ts-jest,ts-node"
 
   unit-test:
-    name: 'Unit Tests & Coverage'
+    name: 'Unit Tests'
     runs-on: self-hosted
     needs: lint-check
     steps:
@@ -195,7 +219,7 @@ jobs:
             junit.xml
 
   cdk-synth:
-    name: 'CDK Synthesis & Validation'
+    name: 'CDK Synthesis'
     runs-on: self-hosted
     needs: unit-test
     strategy:
