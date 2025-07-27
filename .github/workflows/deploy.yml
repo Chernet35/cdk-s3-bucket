@@ -42,7 +42,6 @@ jobs:
 
       - name: Setup build environment
         run: |
-          chmod +x scripts/setup-build-env.sh
           ./scripts/setup-build-env.sh
 
       - name: Setup Node.js
@@ -54,13 +53,11 @@ jobs:
 
       - name: Install dependencies with optimization
         run: |
-          chmod +x scripts/install-deps.sh
           ./scripts/install-deps.sh
 
       # Git Secrets Scanning
       - name: Run Gitleaks Scan
         run: |
-          chmod +x scripts/security-scan.sh
           ./scripts/security-scan.sh gitleaks
 
       - name: Upload Gitleaks scan results to GitHub Security tab
@@ -90,16 +87,14 @@ jobs:
       # Code Quality with SonarQube
       - name: SonarQube Scan
         run: |
-          chmod +x scripts/sonar-scan.sh
-          ./scripts/sonar-scan.sh
+          ./scripts/security-scan.sh sonar
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
       # OWASP Dependency Check
       - name: Run OWASP Dependency Check
         run: |
-          chmod +x scripts/owasp-scan.sh
-          ./scripts/owasp-scan.sh
+          ./scripts/security-scan.sh owasp
 
       - name: Upload OWASP Dependency Check results
         uses: actions/upload-artifact@v4
@@ -138,13 +133,12 @@ jobs:
 
       - name: Run code quality checks
         run: |
-          chmod +x scripts/code-quality.sh
-          ./scripts/code-quality.sh
+          ./scripts/security-scan.sh code-quality
 
   # Unit Testing
   test:
     name: 'Unit Tests & Coverage'
-    runs-on: [self-hosted, linux, test]
+    runs-on: self-hosted
     timeout-minutes: 20
     needs: code-quality
     steps:
@@ -165,7 +159,6 @@ jobs:
 
       - name: Run optimized tests
         run: |
-          chmod +x scripts/run-tests.sh
           ./scripts/run-tests.sh
 
       - name: Upload coverage reports to Codecov
@@ -212,7 +205,6 @@ jobs:
 
       - name: CDK Synthesis and Validation
         run: |
-          chmod +x scripts/cdk-synth.sh
           ./scripts/cdk-synth.sh ${{ matrix.environment }}
 
       - name: Upload CDK templates
