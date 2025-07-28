@@ -26,7 +26,7 @@ permissions:
   contents: read
 
 jobs:
-  install-deps:
+  install:
     name: Install Dependencies
     runs-on: ubuntu-latest
 
@@ -43,31 +43,65 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-  lint:
-    name: CloudFormation Lint
+  build:
+    name: Build & Test
     runs-on: ubuntu-latest
-    needs: install-deps
+    needs: install
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Python + pip + cfn-lint
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile TypeScript
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+
+  synth:
+    name: CDK Synth & Lint
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile TypeScript
+        run: npm run build
+
+      - name: Synthesize CDK Template
+        run: npx cdk synth > synthesized.template.json
+
+      - name: Install Python and cfn-lint
         run: |
           sudo apt-get update
           sudo apt-get install -y python3 python3-pip
           pip3 install cfn-lint
 
-      - name: Synthesize CDK (generate templates)
-        run: npx cdk synth > synthesized.template.json
-
-      - name: Lint CloudFormation template
+      - name: Run cfn-lint
         run: cfn-lint synthesized.template.json
 
-  test:
-    name: Unit Tests
+  diff:
+    name: CDK Diff
     runs-on: ubuntu-latest
-    needs: install-deps
+    needs: synth
 
     steps:
       - name: Checkout code
@@ -81,36 +115,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests
-        run: npm test
-
-  synth-diff:
-    name: CDK Synth & Diff
-    runs-on: ubuntu-latest
-    needs: [install-deps, test]
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: CDK Synth
-        run: npx cdk synth
+      - name: Compile TypeScript
+        run: npm run build
 
       - name: CDK Diff
         run: npx cdk diff
 
   deploy:
-    name: CDK Deploy (OIDC)
+    name: Deploy to AWS
     runs-on: ubuntu-latest
-    needs: [synth-diff]
+    needs: diff
 
     environment:
       name: ${{ github.event.inputs.environment || 'dev' }}
@@ -128,11 +142,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Compile TypeScript
+        run: npm run build
+
       - name: Configure AWS Credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          role-to-assume: arn:aws:iam::123456789012:role/github-cdk-deploy-role  # ← UPDATE THIS
+          role-to-assume: arn:aws:iam::123456789012:role/github-cdk-deploy-role # 🔁 Replace this
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Deploy CDK Stack
+      - name: CDK Deploy
         run: npx cdk deploy --require-approval never
