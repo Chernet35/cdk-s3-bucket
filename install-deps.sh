@@ -31,9 +31,17 @@ validate_package_files() {
     fi
     
     # Validate package.json syntax
-    if ! jq empty package.json 2>/dev/null; then
-        print_error "package.json has invalid JSON syntax"
-        return 1
+    if command -v jq >/dev/null 2>&1; then
+        if ! jq empty package.json 2>/dev/null; then
+            print_error "package.json has invalid JSON syntax"
+            return 1
+        fi
+    else
+        # Basic JSON validation without jq
+        if ! node -e "JSON.parse(require('fs').readFileSync('package.json', 'utf8'))" 2>/dev/null; then
+            print_error "package.json has invalid JSON syntax"
+            return 1
+        fi
     fi
     
     print_success "Package files validated"
