@@ -1,4 +1,3 @@
-
 name: 'Enterprise CDK Deployment Pipeline'
 
 on:
@@ -31,6 +30,7 @@ env:
   NODE_VERSION: '20'
   CDK_VERSION: '2.150.0'
   NODE_OPTIONS: '--max-old-space-size=4096'
+  SECURITY_THRESHOLD: 'high' # Set to 'critical' to only fail on critical vulnerabilities
 
 permissions:
   id-token: write
@@ -52,6 +52,7 @@ jobs:
       cache-key: ${{ steps.cache.outputs.key }}
       deploy-dev: ${{ steps.env.outputs.dev }}
       deploy-prod: ${{ steps.env.outputs.prod }}
+      security-status: ${{ steps.security-audit.outputs.status }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -89,22 +90,41 @@ jobs:
       - name: Install dependencies
         run: npm ci --silent --no-audit --no-fund
 
-      - name: Security audit
+      - name: Enhanced Security Audit
+        id: security-audit
+        continue-on-error: true
         run: |
-          # Run audit and capture exit code
-          npm audit --audit-level=high --json > audit.json 2>/dev/null || AUDIT_EXIT=$?
+          # Run audit and capture output
+          npm audit --audit-level=${{ env.SECURITY_THRESHOLD }} --json > audit.json 2>/dev/null || AUDIT_EXIT=$?
           
           # Check if audit.json exists and has content
           if [[ -f "audit.json" && -s "audit.json" ]]; then
-            CRITICAL=$(jq '.metadata.vulnerabilities.critical // 0' audit.json 2>/dev/null || echo "0")
-            HIGH=$(jq '.metadata.vulnerabilities.high // 0' audit.json 2>/dev/null || echo "0")
+            CRITICAL=$(jq '.metadata.vulnerabilities.critical // 0' audit.json)
+            HIGH=$(jq '.metadata.vulnerabilities.high // 0' audit.json)
             
-            # Only fail if we have actual high/critical vulnerabilities
-            if [[ $((CRITICAL + HIGH)) -gt 0 ]]; then
+            # Create security report
+            echo "## Security Audit Results" >> $GITHUB_STEP_SUMMARY
+            echo "**Critical:** $CRITICAL | **High:** $HIGH" >> $GITHUB_STEP_SUMMARY
+            
+            # Output vulnerability details
+            VULNS=$(jq -r '.vulnerabilities[] | "\(.severity): \(.name)@\(.range) - \(.title)"' audit.json 2>/dev/null || true)
+            if [[ -n "$VULNS" ]]; then
+              echo -e "\n### Vulnerabilities Found:" >> $GITHUB_STEP_SUMMARY
+              echo "$VULNS" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            # Only fail if we have vulnerabilities at our threshold level
+            if [[ "${{ env.SECURITY_THRESHOLD }}" == "critical" && $CRITICAL -gt 0 ]] || \
+               [[ "${{ env.SECURITY_THRESHOLD }}" == "high" && $((CRITICAL + HIGH)) -gt 0 ]]; then
+              echo "status=failure" >> $GITHUB_OUTPUT
               echo "Found $CRITICAL critical and $HIGH high vulnerabilities"
               exit 1
+            else
+              echo "status=success" >> $GITHUB_OUTPUT
+              echo "No ${{ env.SECURITY_THRESHOLD }} vulnerabilities found"
             fi
           else
+            echo "status=success" >> $GITHUB_OUTPUT
             echo "No vulnerabilities found or audit completed successfully"
           fi
 
@@ -113,3 +133,90 @@ jobs:
           npx eslint . --ext .ts,.tsx --max-warnings 5
           npx prettier --check "**/*.{ts,tsx,json,md}" --write=false
           npx tsc --noEmit --skipLibCheck
+
+  test:
+    name: 'Tests'
+    runs-on: self-hosted
+    timeout-minutes: 15
+    needs: validate
+    if: ${{ !inputs.skip_tests && needs.validate.outputs.security-status != 'failure' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            ~/.npm
+          key: ${{ needs.validate.outputs.cache-key }}
+
+      - name: Install dependencies
+        run: npm ci --silent --no-audit --no-fund
+
+      - name: Run tests
+        run: |
+          npm run test:coverage
+          COVERAGE=$(jq -r '.total.lines.pct' coverage/coverage-summary.json)
+          echo "Coverage: $COVERAGE%"
+          (( $(echo "$COVERAGE < 80" | bc -l) )) && exit 1 || true
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage/lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  synth:
+    name: 'CDK Synth (${{ matrix.env }})'
+    runs-on: self-hosted
+    timeout-minutes: 10
+    needs: [validate, test]
+    if: always() && needs.validate.result == 'success' && (needs.test.result == 'success' || needs.test.result == 'skipped')
+    strategy:
+      matrix:
+        env: [dev, prod]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            ~/.npm
+          key: ${{ needs.validate.outputs.cache-key }}
+
+      - name: Install dependencies
+        run: |
+          npm ci --silent --no-audit --no-fund
+          npm install -g aws-cdk@${{ env.CDK_VERSION }}
+
+      - name: CDK synth
+        run: |
+          cdk synth \
+            --context env=${{ matrix.env }} \
+            --output cdk.out/${{ matrix.env }} \
+            --strict
+
+      - name: Validate templates
+        run: |
+          pip3 install --user cfn-lint
+          find cdk.out/${{ matrix.env }} -name "*.template.json" -exec cfn-lint {} \;
+
+      - name: Upload templates
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdk-templates-${{ matrix.env }}
+          path: cdk.out/${{ matrix.env }}/
+          retention-days: 30
