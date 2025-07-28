@@ -8,195 +8,23 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Environment to deploy (dev or prod)'
+        description: 'Environment to deploy to'
         required: true
         default: 'dev'
 
 env:
+  NODE_VERSION: '20.x'
   AWS_REGION: us-east-1
-  NODE_VERSION: 18
-  CDK_ENV_DEV: 123456789012/us-east-1
-  CDK_ENV_PROD: 210987654321/us-east-1
-
-permissions:
-  id-token: write
-  contents: read
+  CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
 
 jobs:
-  # Lint and Format Check
-  lint-and-format:
-    name: Lint & Format
+  lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      cache-key: ${{ steps.cache.outputs.cache-key }}
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Cache Node Modules
-        id: cache
-        uses: actions/cache@v3
-        with:
-          path: |
-            node_modules
-            ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
-
-      - name: Install Dependencies
-        run: npm ci
-
-      - name: Run Lint
-        run: npm run lint
-
-      - name: Check Format
-        run: npm run format:check
-
-  # Jest Tests with Coverage
-  test:
-    name: Run Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: lint-and-format
-    if: always() && needs.lint-and-format.result == 'success'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Restore dependencies
-        uses: actions/cache@v3
-        with:
-          path: |
-            node_modules
-            ~/.npm
-          key: ${{ needs.lint-and-format.outputs.cache-key }}
-
-      - name: Install Dependencies (if missing)
-        run: |
-          if [ ! -d "node_modules" ]; then
-            npm ci
-          fi
-
-      - name: Run Tests with Coverage
-        run: |
-          npm run test:coverage
-        continue-on-error: false
-
-  # CDK Synthesis and Validation
-  cdk-synth:
-    name: 'CDK Synthesis & Validation'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: [lint-and-format, test]
-    if: always() && (needs.lint-and-format.result == 'success' && (needs.test.result == 'success' || needs.test.result == 'skipped'))
-    strategy:
-      matrix:
-        environment: [dev, prod]
-    outputs:
-      dev-template-hash: ${{ steps.template-hash.outputs.dev-hash }}
-      prod-template-hash: ${{ steps.template-hash.outputs.prod-hash }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Restore dependencies cache
-        uses: actions/cache@v3
-        with:
-          path: |
-            node_modules
-            ~/.npm
-            ~/.cache
-          key: ${{ needs.lint-and-format.outputs.cache-key }}
-
-      - name: Install dependencies (if needed)
-        run: |
-          if [ ! -d "node_modules" ]; then
-            npm install --silent --no-audit --no-fund --prefer-offline
-          fi
-
-      - name: Install AWS CDK
-        run: |
-          if ! command -v cdk &> /dev/null; then
-            npm install -g aws-cdk@latest
-          fi
-
-      - name: Set up Python (for cfn-lint)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Install cfn-lint
-        run: pip install cfn-lint
-
-      - name: CDK Synthesis
-        run: |
-          cdk synth \
-            --context env=${{ matrix.environment }} \
-            --output cdk.out/${{ matrix.environment }} \
-            --strict \
-            --verbose
-        env:
-          CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
-
-      - name: Validate CloudFormation templates
-        run: |
-          find cdk.out/${{ matrix.environment }} -name "*.template.json" -exec cfn-lint {} \;
-
-      - name: Generate template hash
-        id: template-hash
-        run: |
-          HASH=$(find cdk.out/${{ matrix.environment }} -name "*.template.json" -exec sha256sum {} \; | sha256sum | cut -d' ' -f1)
-          echo "${{ matrix.environment }}-hash=$HASH" >> $GITHUB_OUTPUT
-
-      - name: Upload CDK templates
-        uses: actions/upload-artifact@v4
-        with:
-          name: cdk-templates-${{ matrix.environment }}
-          path: cdk.out/${{ matrix.environment }}/
-          retention-days: 30
-
-  # Deployment (Manual via workflow_dispatch or downstream)
-  deploy:
-    name: Deploy to AWS
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: cdk-synth
-    if: github.event_name == 'workflow_dispatch'
-    environment:
-      name: ${{ github.event.inputs.environment }}
-      url: https://console.aws.amazon.com/cloudformation/home
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure AWS Credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v3
-        with:
-          role-to-assume: arn:aws:iam::${{ env.CDK_ENV_DEV }}:role/github-oidc-deploy-role
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Setup Node.js
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -204,17 +32,91 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: CDK Bootstrap
-        run: |
-          cdk bootstrap aws://${{ env.CDK_ENV_DEV }}
-        env:
-          CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
+      - name: Run TypeScript check
+        run: npx tsc --noEmit --skipLibCheck
 
-      - name: CDK Deploy
+      - name: Run eslint
+        run: npx eslint . --ext .ts --max-warnings=0
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests with coverage
+        run: npm run test:coverage
+
+  cdk-synth:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    strategy:
+      matrix:
+        environment: [dev, prod]
+    env:
+      ENV: ${{ matrix.environment }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Bootstrap CDK
+        run: npx cdk bootstrap aws://$CDK_DEFAULT_ACCOUNT/$AWS_REGION
+
+      - name: Synthesize CDK templates
+        run: npx cdk synth --context env=${{ matrix.environment }} > synthesized.template.json
+
+      - name: Set up Python with pip3
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install cfn-lint
+        run: pip install cfn-lint
+
+      - name: Validate CloudFormation templates
         run: |
-          cdk deploy \
-            --context env=${{ github.event.inputs.environment }} \
-            --require-approval never \
-            --verbose
-        env:
-          CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
+          cfn-lint synthesized.template.json
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: cdk-synth
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    strategy:
+      matrix:
+        environment: [dev, prod]
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.DEPLOY_ROLE_NAME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Deploy CDK stack
+        run: npx cdk deploy --require-approval never --context env=${{ matrix.environment }}
