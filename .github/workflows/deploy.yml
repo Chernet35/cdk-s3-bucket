@@ -143,7 +143,41 @@ jobs:
 
       - name: Run Prettier check
         run: |
-          npx prettier --check "**/*.{ts,tsx,json,md}" --write=false
+          # Check formatting and provide helpful output
+          echo "Checking code formatting with Prettier..."
+          
+          if npx prettier --check "**/*.{ts,tsx,json,md}"; then
+            echo "✅ All files are properly formatted"
+          else
+            echo "⚠️ Code formatting issues found"
+            echo "Files that need formatting:"
+            npx prettier --list-different "**/*.{ts,tsx,json,md}" || true
+            
+            echo ""
+            echo "To fix formatting issues locally, run:"
+            echo "  npm run format"
+            echo "  or"
+            echo "  npx prettier --write \"**/*.{ts,tsx,json,md}\""
+            
+            # For development branches, auto-fix formatting
+            if [[ "${{ github.ref_name }}" != "main" && "${{ github.ref_name }}" != "prod" ]]; then
+              echo ""
+              echo "Auto-fixing formatting for development branch..."
+              npx prettier --write "**/*.{ts,tsx,json,md}"
+              
+              # Check if there are changes to commit
+              if ! git diff --quiet; then
+                echo "Formatting changes applied. Please commit these changes:"
+                git diff --name-only
+              else
+                echo "No formatting changes needed after auto-fix"
+              fi
+            else
+              echo ""
+              echo "❌ Formatting issues must be fixed before merging to main/prod"
+              exit 1
+            fi
+          fi
 
       - name: TypeScript compilation check
         run: |
