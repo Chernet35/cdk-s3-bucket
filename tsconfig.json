@@ -1,17 +1,16 @@
 {
   "compilerOptions": {
+    "rootDir": "./",
+    "outDir": "dist",
     "target": "ES2020",
-    "module": "CommonJS",
-    "lib": ["es2020"],
+    "module": "commonjs",
     "strict": true,
-    "rootDir": ".",  // <-- Changed from "src" to project root
-    "outDir": "./dist",
     "esModuleInterop": true,
-    "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "inlineSourceMap": true,  // Helps with debugging
-    "inlineSources": true     // Includes original TS in sourcemaps
+    "skipLibCheck": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"],  // Explicitly includes src & test
-  "exclude": ["node_modules", "cdk.out"]  // Excludes unnecessary dirs
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts"
+  ]
 }
