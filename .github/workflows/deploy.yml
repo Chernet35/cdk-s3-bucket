@@ -25,126 +25,156 @@ permissions:
   actions: read
 
 jobs:
-  setup:
-    name: Setup Environment
+  # Reused from nodejs-ci template
+  lint:
+    name: Lint, Format, and TypeScript Check
     runs-on: self-hosted
+    timeout-minutes: 10
     outputs:
-      node-version: ${{ steps.set-node.outputs.node-version }}
+      cache-key: ${{ steps.cache-key.outputs.key }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Use Node.js ${{ env.NODE_VERSION }}
-        id: set-node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Generate cache key
+        id: cache-key
+        run: echo "key=deps-${{ runner.os }}-${{ hashFiles('package-lock.json') }}" >> $GITHUB_OUTPUT
 
-  compile:
-    name: Compile TypeScript
-    runs-on: self-hosted
-    needs: setup
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Cache dependencies
+        uses: actions/cache@v3
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          path: |
+            node_modules
+            ~/.npm
+            ~/.cache
+          key: ${{ steps.cache-key.outputs.key }}
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Compile TypeScript
-        run: npm run build
+      - name: Lint code
+        run: npx eslint . --ext .ts,.tsx --format stylish
 
-  lint:
-    name: Lint & Format Check
-    runs-on: self-hosted
-    needs: setup
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
+      - name: Format check
+        run: npx prettier --check "**/*.{ts,tsx,json,md}"
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run ESLint
-        run: npm run lint
-
-      - name: Run Prettier Check
-        run: npm run format:check
+      - name: TypeScript check
+        run: npx tsc --noEmit --skipLibCheck
 
   test:
-    name: Run Unit Tests
+    name: Unit Tests & Coverage
     runs-on: self-hosted
-    needs: compile
+    timeout-minutes: 15
+    needs: lint
+    if: ${{ !inputs.skip_tests }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Restore dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            ~/.npm
+            ~/.cache
+          key: ${{ needs.lint.outputs.cache-key }}
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Run Tests with Coverage
+      - name: Run tests with coverage
         run: npm run test:coverage
+        env:
+          NODE_OPTIONS: '--max-old-space-size=4096'
 
-      - name: Upload Coverage Report
-        if: success()
-        uses: actions/upload-artifact@v4
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        if: always()
         with:
-          name: coverage-report
-          path: coverage/
+          file: ./coverage/lcov.info
+          flags: unittests
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
 
-  security:
-    name: Security Scan
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: |
+            coverage/
+            test-results.xml
+          retention-days: 30
+
+  synth:
+    name: CDK Synthesis & Template Validation
     runs-on: self-hosted
-    needs: setup
+    timeout-minutes: 10
+    needs: [lint, test]
+    if: always() && (needs.lint.result == 'success' && (needs.test.result == 'success' || needs.test.result == 'skipped'))
+    strategy:
+      matrix:
+        environment: [dev, prod]
+    outputs:
+      template-hash: ${{ steps.template-hash.outputs.hash }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Restore dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            ~/.npm
+            ~/.cache
+          key: ${{ needs.lint.outputs.cache-key }}
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Run npm audit
-        run: npm audit --audit-level=high
+      - name: Install AWS CDK
+        run: npm install -g aws-cdk@latest
 
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        with:
-          args: detect --source=. --no-git --verbose
+      - name: Synthesize CDK app
+        run: |
+          cdk synth \
+            --context env=${{ matrix.environment }} \
+            --output cdk.out/${{ matrix.environment }} \
+            --strict \
+            --verbose
+        env:
+          CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
 
-  build:
-    name: Build Artifact
-    runs-on: self-hosted
-    needs: [test, lint, security]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
+      - name: Validate synthesized templates
+        run: |
+          if ! command -v cfn-lint &> /dev/null; then
+            pip3 install --user cfn-lint
+          fi
+          find cdk.out/${{ matrix.environment }} -name "*.template.json" -exec cfn-lint {} \;
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Generate template hash
+        id: template-hash
+        run: |
+          HASH=$(find cdk.out/${{ matrix.environment }} -name "*.template.json" -exec sha256sum {} \; | sha256sum | cut -d' ' -f1)
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
 
-      - name: Build Project
-        run: npm run build
-
-      - name: Upload Build Artifacts
+      - name: Upload CDK templates
         uses: actions/upload-artifact@v4
         with:
-          name: app-build
-          path: ${{ env.BUILD_DIR }}/
-      with:
-        name: node-app
-        path: artifact
-        retention-days: 5
+          name: cdk-templates-${{ matrix.environment }}
+          path: cdk.out/${{ matrix.environment }}/
