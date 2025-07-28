@@ -1,2 +1,1 @@
-// src/index.ts
-export * from './lib/secure-bucket';
+export * from './secure-bucket-stack';
