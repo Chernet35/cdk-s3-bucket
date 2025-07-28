@@ -25,5 +25,14 @@
     "outDir": "lib",
     "rootDir": "."
   },
-  "exclude": ["node_modules", "cdk.out", "lib", "**/*.test.ts", "**/*.d.ts"]
+  "include": ["bin/**/*", "lib/**/*", "test/**/*"],
+  "exclude": [
+    "node_modules",
+    "cdk.out",
+    "lib/**/*.js",
+    "lib/**/*.d.ts",
+    "src/**/*",
+    "vite.config.ts",
+    "**/*.test.js"
+  ]
 }
