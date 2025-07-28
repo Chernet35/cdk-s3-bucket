@@ -1,11 +1,22 @@
-import { Stack, StackProps } from 'aws-cdk-lib';
-import { Construct } from 'constructs';
-import { SecureBucket, SecureBucketProps } from './secure-bucket';
+it('creates a bucket without encryption and versioning', () => {
+  const app = new App();
+  const stack = new SecureBucketStack(app, 'TestStackWithoutProps', {
+    bucketProps: {
+      encryption: false,
+      versioning: false,
+    },
+  });
 
-export class SecureBucketStack extends Stack {
-  constructor(scope: Construct, id: string, props?: StackProps & { bucketProps?: SecureBucketProps }) {
-    super(scope, id, props);
+  const template = Template.fromStack(stack);
 
-    new SecureBucket(this, 'MySecureBucket', props?.bucketProps || {});
-  }
-}
+  template.hasResourceProperties('AWS::S3::Bucket', {
+    VersioningConfiguration: {
+      Status: 'Suspended',
+    },
+  });
+
+  // Ensure encryption is NOT present
+  const resources = template.findResources('AWS::S3::Bucket');
+  const bucket = Object.values(resources)[0];
+  expect(bucket.Properties).not.toHaveProperty('BucketEncryption');
+});
