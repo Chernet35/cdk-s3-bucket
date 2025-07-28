@@ -3,14 +3,14 @@
     "target": "ES2020",
     "module": "CommonJS",
     "lib": ["ES2020"],
-    "rootDir": ".",               // 🔧 Changed from "src" to "." to include all project files
-    "outDir": "dist",
-    "strict": true,
+    "rootDir": ".",                          // ✅ Allow src/ and test/
+    "outDir": "dist",                        // ✅ Output compiled files
+    "strict": true,                          // ✅ Enable all strict type checks
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["node", "jest"]
+    "types": ["node", "jest"]               // ✅ Include node and test types
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "include": ["src/**/*.ts", "test/**/*.ts"], // ✅ Include both code and tests
   "exclude": ["node_modules", "cdk.out", "dist"]
 }
