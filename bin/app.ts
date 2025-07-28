@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import 'source-map-support/register';
-import { App, Environment, Stack, StackProps } from 'aws-cdk-lib';
+import { App, Environment, Stack, StackProps, Duration } from 'aws-cdk-lib';
 import { SecureBucket, SecureBucketProps } from '../lib';
 
 /**
@@ -108,20 +108,20 @@ class SecureBucketApp extends App {
               {
                 id: 'production-lifecycle-policy',
                 enabled: true,
-                abortIncompleteMultipartUploadAfter: { days: 7 },
-                noncurrentVersionExpiration: { days: 365 },
+                abortIncompleteMultipartUploadAfter: Duration.days(7),
+                noncurrentVersionExpiration: Duration.days(365),
                 transitions: [
                   {
                     storageClass: 'STANDARD_IA' as any,
-                    transitionAfter: { days: 30 },
+                    transitionAfter: Duration.days(30),
                   },
                   {
                     storageClass: 'GLACIER' as any,
-                    transitionAfter: { days: 90 },
+                    transitionAfter: Duration.days(90),
                   },
                   {
                     storageClass: 'DEEP_ARCHIVE' as any,
-                    transitionAfter: { days: 365 },
+                    transitionAfter: Duration.days(365),
                   },
                 ],
               },
