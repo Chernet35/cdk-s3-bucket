@@ -1,4 +1,3 @@
-// lib/secure-bucket-stack.ts
 import { Stack, StackProps } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { SecureBucket, SecureBucketProps } from './secure-bucket';
@@ -10,4 +9,3 @@ export class SecureBucketStack extends Stack {
     new SecureBucket(this, 'SecureBucket', props?.bucketProps || {});
   }
 }
-
