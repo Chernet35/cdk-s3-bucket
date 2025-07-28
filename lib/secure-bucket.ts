@@ -1,31 +1,29 @@
-import {
-  Bucket,
-  BucketEncryption,
-  IntelligentTieringStatus,
-  IntelligentTieringOptionalField,
-  IntelligentTieringConfiguration,
-} from 'aws-cdk-lib/aws-s3';
+import { Stack, StackProps } from 'aws-cdk-lib';
+import { Construct } from 'constructs';
+import { CfnBucket } from 'aws-cdk-lib/aws-s3';
 
-const intelligentTieringConfigurations: IntelligentTieringConfiguration[] = [
-  {
-    name: 'archive-tiering',
-    status: IntelligentTieringStatus.ENABLED,
-    tierings: [
-      {
-        accessTier: 'ARCHIVE_ACCESS',
-        days: 90,
-      },
-      {
-        accessTier: 'DEEP_ARCHIVE_ACCESS',
-        days: 180,
-      },
-    ],
-    optionalFields: [IntelligentTieringOptionalField.OBJECT_SIZE],
-  },
-];
+export class SecureBucketStack extends Stack {
+  constructor(scope: Construct, id: string, props?: StackProps) {
+    super(scope, id, props);
 
-new Bucket(this, 'SecureBucket', {
-  versioned: true,
-  encryption: BucketEncryption.S3_MANAGED,
-  intelligentTieringConfigurations,
-});
+    new CfnBucket(this, 'SecureTieredBucket', {
+      bucketName: 'secure-tiered-bucket-demo', // ⚠️ Must be globally unique or omit this for auto-naming
+      intelligentTieringConfigurations: [
+        {
+          id: 'ArchiveDeepArchiveTiering',
+          status: 'Enabled',
+          tierings: [
+            {
+              accessTier: 'ARCHIVE_ACCESS',
+              days: 90,
+            },
+            {
+              accessTier: 'DEEP_ARCHIVE_ACCESS',
+              days: 180,
+            },
+          ],
+        },
+      ],
+    });
+  }
+}
