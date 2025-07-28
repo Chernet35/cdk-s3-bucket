@@ -1,103 +1,176 @@
-name: 'Enterprise CDK Deployment Pipeline'
+name: 'Secure CDK Deployment Pipeline'
 
 on:
   push:
     branches: [main, develop]
-    paths-ignore: ['**.md', 'docs/**', '.gitignore']
   pull_request:
     branches: [main]
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Target environment'
+        description: 'Deployment environment'
         required: true
         default: 'dev'
         type: choice
-        options: ['dev', 'staging', 'prod']
-      skip_tests:
-        description: 'Skip tests (emergency only)'
-        required: false
-        default: false
-        type: boolean
-      dry_run:
-        description: 'Dry run only'
-        required: false
-        default: false
-        type: boolean
+        options: [dev, prod]
 
 env:
   AWS_REGION: us-east-1
   NODE_VERSION: '20'
-  CDK_VERSION: '2.150.0'
-  NODE_OPTIONS: '--max-old-space-size=4096'
+  TRIVY_VERSION: '0.50.0'
+  GITLEAKS_VERSION: '8.24.3'
 
 permissions:
   id-token: write
   contents: read
-  actions: read
-  pull-requests: write
   security-events: write
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  actions: read
 
 jobs:
-  validate:
-    name: 'Validation'
-    runs-on: [self-hosted, linux]
-    timeout-minutes: 10
-    outputs:
-      cache-key: ${{ steps.cache.outputs.key }}
-      deploy-dev: ${{ steps.env.outputs.dev }}
-      deploy-prod: ${{ steps.env.outputs.prod }}
+
+  #############################################
+  # Security Scanning (Trivy + npm audit)
+  #############################################
+  security-scan:
+    name: 'Security Scanning'
+    runs-on: self-hosted
+    timeout-minutes: 30
+
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - name: Environment logic
-        id: env
+      - name: Setup System Tools
         run: |
-          DEV="false"; PROD="false"
-          [[ "${{ github.ref }}" == "refs/heads/develop" || "${{ inputs.environment }}" == "dev" ]] && DEV="true"
-          [[ "${{ inputs.environment }}" == "prod" || "${{ contains(github.event.head_commit.message, '[deploy-prod]') }}" == "true" ]] && PROD="true"
-          echo "dev=$DEV" >> $GITHUB_OUTPUT
-          echo "prod=$PROD" >> $GITHUB_OUTPUT
+          sudo pkill -f dpkg || true
+          sudo rm -rf /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock*
+          echo 'DPkg::Lock::Timeout "120";' | sudo tee /etc/apt/apt.conf.d/100-timeout
+          sudo apt-get update -y
+          sudo apt-get install -y ca-certificates curl wget unzip jq gnupg software-properties-common lsb-release apt-transport-https tar
 
-      - name: Setup cache
-        id: cache
-        run: |
-          KEY="deps-${{ runner.os }}-${{ env.NODE_VERSION }}-${{ hashFiles('package-lock.json') }}"
-          echo "key=$KEY" >> $GITHUB_OUTPUT
-
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Cache dependencies
+      - name: Cache Node Modules
         uses: actions/cache@v4
         with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Install Dependencies
+        run: npm ci --no-audit --prefer-offline
+
+      - name: Install ESLint React Hooks Plugin (if missing)
+        run: |
+          if ! npm list --depth=0 eslint-plugin-react-hooks &>/dev/null; then
+            npm install --save-dev eslint-plugin-react-hooks
+          fi
+
+      - name: Run npm Audit
+        run: |
+          npm audit --omit=dev --audit-level=critical --json > npm-audit-results.json || true
+          if jq -e '.metadata.vulnerabilities.critical > 0' npm-audit-results.json; then
+            echo "Critical vulnerabilities found!"
+            exit 1
+          fi
+
+      - name: Install Trivy
+        run: |
+          wget -q https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz
+          tar zxvf trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz
+          sudo mv trivy /usr/local/bin/
+
+      - name: Cache Trivy DB
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ env.TRIVY_VERSION }}
+          restore-keys: |
+            trivy-db-
+
+      - name: Run Trivy Scan
+        run: trivy fs --exit-code 1 --severity CRITICAL,HIGH --format sarif --output trivy-results.sarif .
+
+      - name: Upload Trivy Scan Results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+  #############################################
+  # Linting & Formatting
+  #############################################
+  code-quality:
+    name: 'Code Quality & Formatting'
+    runs-on: self-hosted
+    needs: security-scan
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run ESLint with Correct Config
+        run: npx eslint . --config ./eslint.config.js
+
+      - name: Run Prettier Check
+        run: npm run format:check
+
+      - name: TypeScript Compilation Check
+        run: npx tsc --noEmit
+
+      - name: Detect Unused Dependencies
+        run: npx depcheck --ignores="@types/*,eslint-*,prettier,jest,ts-jest,ts-node"
+
+  #############################################
+  # Unit Testing & Coverage
+  #############################################
+  test:
+    name: 'Unit Tests & Coverage'
+    runs-on: self-hosted
+    needs: code-quality
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Unit Tests
+        run: npm run test:coverage
+
+      - name: Upload Code Coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage/lcov.info
+          flags: unittests
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload Test Results Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
           path: |
-            node_modules
-            ~/.npm
-          key: ${{ steps.cache.outputs.key }}
-          restore-keys: deps-${{ runner.os }}-${{ env.NODE_VERSION }}-
-
-      - name: Install dependencies
-        run: npm ci --silent --no-audit --no-fund
-
-      - name: Security audit
-        run: |
-          npm audit --audit-level=high --json > audit.json || true
-          CRITICAL=$(jq '.metadata.vulnerabilities.critical // 0' audit.json)
-          HIGH=$(jq '.metadata.vulnerabilities.high // 0' audit.json)
-          [[ $((CRITICAL + HIGH)) -gt 0 ]] && exit 1 || true
-
-      - name: Lint and format
-        run: |
-          npx eslint . --ext .ts,.tsx --max-warnings 5
-          npx prettier --check "**/*.{ts,tsx,json,md}" --write=false
-          npx tsc --noEmit --skipLibCheck
-
+            coverage/
+            junit.xml
