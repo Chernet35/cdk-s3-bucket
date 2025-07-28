@@ -15,26 +15,24 @@ on:
         options: [dev, prod]
 
 env:
-  NODE_VERSION: '18.x'
-  AWS_REGION: 'us-east-1'
+  AWS_REGION: us-east-1
+  NODE_VERSION: '20'
+  TRIVY_VERSION: '0.50.0'
+  GITLEAKS_VERSION: '8.24.3'
 
 permissions:
   id-token: write
   contents: read
+  security-events: write
+  actions: read
+
 
 jobs:
-
-  lint-and-format:
-    name: Lint & Format
+  lint:
+    name: Lint and Format Code
     runs-on: ubuntu-latest
-    outputs:
-      cache-key: ${{ steps.cache-key.outputs.key }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Generate Cache Key
-        id: cache-key
-        run: echo "key=deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-$(md5sum package-lock.json | cut -d ' ' -f1)" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -45,78 +43,66 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Lint code
-        run: npm run lint
+      - name: Run ESLint
+        run: npx eslint . --max-warnings=0
 
-      - name: Format code
-        run: npm run format:check
+      - name: Run Prettier Check
+        run: npx prettier --check .
 
   test:
     name: Run Unit Tests
     runs-on: ubuntu-latest
-    needs: lint-and-format
+    needs: lint
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests
-        run: npm test -- --ci --coverage
+      - name: Run Unit Tests
+        run: npm run test
 
   synth:
-    name: CDK Synth
+    name: CDK Synth & Diff
     runs-on: ubuntu-latest
     needs: test
-    outputs:
-      stack-output-dir: ${{ steps.synth.outputs.stack-dir }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Run CDK Synth
-        id: synth
-        run: |
-          export STACK_DIR=cdk.out
-          npm run build
-          cdk synth --output $STACK_DIR
-          echo "stack-dir=$STACK_DIR" >> $GITHUB_OUTPUT
+      - name: Install AWS CDK
+        run: npm install -g aws-cdk
 
-  diff:
-    name: CDK Diff
-    runs-on: ubuntu-latest
-    needs: synth
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Configure AWS Credentials
+      - name: Configure AWS Credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.CDK_ROLE_NAME }}
+          role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/GitHubOIDCDeployRole
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: CDK Diff
-        id: cdk-diff
+      - name: CDK Synth
+        run: cdk synth --context env=${{ github.event.inputs.environment || 'dev' }}
+
+      - name: CDK Diff Validation
         run: |
-          DIFF=$(cdk diff --context env=${{ github.event.inputs.environment || 'dev' }} 2>&1)
-          echo "$DIFF" | tee diff.txt
-          echo '```diff' >> $GITHUB_STEP_SUMMARY
-          echo "$DIFF" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          cdk diff --context env=${{ github.event.inputs.environment || 'dev' }} > diff.txt
+          if grep -q "Stack .* has changes" diff.txt; then
+            echo "❌ Stack contains unauthorized changes. Review and approve before proceeding."
+            cat diff.txt
+            exit 1
+          else
+            echo "✅ No unauthorized changes detected."
+          fi
