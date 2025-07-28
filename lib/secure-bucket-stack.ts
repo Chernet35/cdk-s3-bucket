@@ -7,10 +7,10 @@ export class SecureBucketStack extends Stack {
     super(scope, id, props);
 
     new SecureBucket(this, 'MySecureBucket', {
-      projectId: 'myproject',    // REQUIRED — replace with your actual project id
-      environment: 'dev',        // optional
-      enableIntelligentTiering: true,  // example usage
-      // Add any other props you need here
+      projectId: 'myproject',
+      environment: 'dev',
+      enableIntelligentTiering: true,
+      // other props...
     });
   }
 }
