@@ -23,7 +23,12 @@ interface AppConfig {
 class SecureBucketStack extends Stack {
   public readonly secureBucket: SecureBucket;
 
-  public constructor(scope: App, id: string, bucketProps: SecureBucketProps, props?: StackProps) {
+  public constructor(
+    scope: App,
+    id: string,
+    bucketProps: SecureBucketProps,
+    props?: StackProps
+  ) {
     super(scope, id, props);
 
     this.secureBucket = new SecureBucket(this, 'SecureBucket', bucketProps);
@@ -72,7 +77,8 @@ class SecureBucketApp extends App {
             projectId: 'astrazeneca-dev',
             enableVersioning: true,
             enableEncryption: true,
-            githubRepo: process.env.GITHUB_REPOSITORY || 'astrazeneca/secure-s3-cdk',
+            githubRepo:
+              process.env.GITHUB_REPOSITORY || 'astrazeneca/secure-s3-cdk',
             allowedBranches: ['main', 'develop', 'feature/*'],
             enableAccessLogging: true,
             enableIntelligentTiering: false,
@@ -88,7 +94,8 @@ class SecureBucketApp extends App {
             projectId: 'astrazeneca-prod',
             enableVersioning: true,
             enableEncryption: true,
-            githubRepo: process.env.GITHUB_REPOSITORY || 'astrazeneca/secure-s3-cdk',
+            githubRepo:
+              process.env.GITHUB_REPOSITORY || 'astrazeneca/secure-s3-cdk',
             allowedBranches: ['main'],
             enableAccessLogging: true,
             enableIntelligentTiering: true,
@@ -140,7 +147,7 @@ class SecureBucketApp extends App {
    */
   private shouldDeployEnvironment(envName: string): boolean {
     const targetEnv = this.node.tryGetContext('env');
-    
+
     if (targetEnv) {
       return targetEnv === envName;
     }
