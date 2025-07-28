@@ -1,13 +1,36 @@
-"scripts": {
-  "build": "tsc",
-  "watch": "tsc -w",
-  "lint": "eslint . --ext .ts",
-  "lint:fix": "eslint . --ext .ts --fix",
-  "test": "jest",
-  "test:watch": "jest --watch",
-  "test:coverage": "jest --coverage --passWithNoTests",
-  "cdk:deploy": "cdk deploy",
-  "cdk:diff": "cdk diff",
-  "cdk:destroy": "cdk destroy",
-  "synth": "cdk synth"
+{
+  "name": "cdk-secure-s3",
+  "version": "1.0.0",
+  "description": "Secure S3 Bucket CDK App",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts --fix",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage --passWithNoTests",
+    "cdk:deploy": "cdk deploy",
+    "cdk:diff": "cdk diff",
+    "cdk:destroy": "cdk destroy",
+    "synth": "cdk synth"
+  },
+  "author": "Chery Moraro",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/jest": "^29.5.2",
+    "@typescript-eslint/eslint-plugin": "^7.5.0",
+    "@typescript-eslint/parser": "^7.5.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-import": "^2.29.1",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.130.0",
+    "constructs": "^10.3.0"
+  }
 }
