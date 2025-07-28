@@ -23,8 +23,8 @@ on:
 env:
   NODE_VERSION: 20
   AWS_REGION: us-east-1
-  CDK_ENV_DEV: '123456789012/us-east-1'       # replace with actual dev account/region
-  CDK_ENV_PROD: '098765432109/us-east-1'      # replace with actual prod account/region
+  CDK_ENV_DEV: '966302817492/us-east-1'       # replace with actual dev account/region
+  CDK_ENV_PROD: '966302817492/us-east-1'      # replace with actual prod account/region
 
 permissions:
   id-token: write
