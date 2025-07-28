@@ -268,10 +268,6 @@ export class SecureBucket extends Construct {
               storageClass: s3.StorageClass.GLACIER,
               transitionAfter: Duration.days(90),
             },
-            {
-              storageClass: s3.StorageClass.DEEP_ARCHIVE,
-              transitionAfter: Duration.days(365),
-            },
           ],
         },
       ];
