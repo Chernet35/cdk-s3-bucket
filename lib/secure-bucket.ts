@@ -7,12 +7,15 @@ export interface SecureBucketProps {
 }
 
 export class SecureBucket extends Construct {
-  constructor(scope: Construct, id: string, props: SecureBucketProps) {
+  constructor(scope: Construct, id: string, props: SecureBucketProps = {}) {
     super(scope, id);
 
+    const encryptionEnabled = props.encryption ?? false;
+    const versioningEnabled = props.versioning ?? false;
+
     new s3.Bucket(this, 'SecureBucketResource', {
-      encryption: props.encryption ? s3.BucketEncryption.S3_MANAGED : undefined,
-      versioned: props.versioning,
+      encryption: encryptionEnabled ? s3.BucketEncryption.S3_MANAGED : undefined,
+      versioned: versioningEnabled,
     });
   }
 }
