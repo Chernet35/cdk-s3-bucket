@@ -122,8 +122,8 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      - name: Run ESLint
-        run: npx eslint .
+      - name: Run ESLint with Correct Config
+        run: npx eslint . --config ./eslint.config.js
 
       - name: Run Prettier Check
         run: npm run format:check
