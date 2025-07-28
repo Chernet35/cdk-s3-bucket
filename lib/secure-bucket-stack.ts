@@ -1,6 +1,13 @@
-export class SecureBucket extends Construct {
-  constructor(scope: Construct, id: string, props: SecureBucketProps) {
-    super(scope, id);
-    // ...
+// lib/secure-bucket-stack.ts
+import { Stack, StackProps } from 'aws-cdk-lib';
+import { Construct } from 'constructs';
+import { SecureBucket, SecureBucketProps } from './secure-bucket';
+
+export class SecureBucketStack extends Stack {
+  constructor(scope: Construct, id: string, props?: StackProps & { bucketProps?: SecureBucketProps }) {
+    super(scope, id, props);
+
+    new SecureBucket(this, 'SecureBucket', props?.bucketProps || {});
   }
 }
+
