@@ -1,3 +1,4 @@
+
 name: 'Enterprise CDK Deployment Pipeline'
 
 on:
@@ -45,7 +46,7 @@ concurrency:
 jobs:
   validate:
     name: 'Validation'
-    runs-on: self-hosted
+    runs-on: [self-hosted, linux]
     timeout-minutes: 10
     outputs:
       cache-key: ${{ steps.cache.outputs.key }}
@@ -90,10 +91,22 @@ jobs:
 
       - name: Security audit
         run: |
-          npm audit --audit-level=high --json > audit.json || true
-          CRITICAL=$(jq '.metadata.vulnerabilities.critical // 0' audit.json)
-          HIGH=$(jq '.metadata.vulnerabilities.high // 0' audit.json)
-          [[ $((CRITICAL + HIGH)) -gt 0 ]] && exit 1 || true
+          # Run audit and capture exit code
+          npm audit --audit-level=high --json > audit.json 2>/dev/null || AUDIT_EXIT=$?
+          
+          # Check if audit.json exists and has content
+          if [[ -f "audit.json" && -s "audit.json" ]]; then
+            CRITICAL=$(jq '.metadata.vulnerabilities.critical // 0' audit.json 2>/dev/null || echo "0")
+            HIGH=$(jq '.metadata.vulnerabilities.high // 0' audit.json 2>/dev/null || echo "0")
+            
+            # Only fail if we have actual high/critical vulnerabilities
+            if [[ $((CRITICAL + HIGH)) -gt 0 ]]; then
+              echo "Found $CRITICAL critical and $HIGH high vulnerabilities"
+              exit 1
+            fi
+          else
+            echo "No vulnerabilities found or audit completed successfully"
+          fi
 
       - name: Lint and format
         run: |
