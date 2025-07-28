@@ -37,7 +37,7 @@ jobs:
   # Code Quality and Linting
   lint-and-format:
     name: 'Code Quality & Formatting'
-    runs-on: [self-hosted, linux, code-quality]
+    runs-on: self-hosted
     timeout-minutes: 10
     outputs:
       cache-key: ${{ steps.cache-key.outputs.key }}
@@ -160,7 +160,7 @@ jobs:
   # Unit Testing with Coverage
   test:
     name: 'Unit Tests & Coverage'
-    runs-on: [self-hosted, linux, test]
+    runs-on: self-hosted
     timeout-minutes: 15
     needs: lint-and-format
     if: ${{ !inputs.skip_tests }}
@@ -240,7 +240,7 @@ jobs:
   # CDK Synthesis and Validation
   cdk-synth:
     name: 'CDK Synthesis & Validation'
-    runs-on: [self-hosted, linux, cdk]
+    runs-on: self-hosted
     timeout-minutes: 10
     needs: [lint-and-format, test]
     if: always() && (needs.lint-and-format.result == 'success' && (needs.test.result == 'success' || needs.test.result == 'skipped'))
