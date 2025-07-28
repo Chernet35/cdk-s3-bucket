@@ -98,6 +98,11 @@ jobs:
       - name: Run cfn-lint
         run: cfn-lint synthesized.template.json
 
+      - name: Run cfn-lint
+        run: |
+         cfn-lint --ignore-checks W2001 synthesized.template.json
+
+
   diff:
     name: CDK Diff
     runs-on: ubuntu-latest
