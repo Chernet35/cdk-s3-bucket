@@ -13,9 +13,21 @@ export class SecureBucket extends Construct {
     const encryptionEnabled = props.encryption ?? false;
     const versioningEnabled = props.versioning ?? false;
 
-    new s3.Bucket(this, 'SecureBucketResource', {
-      encryption: encryptionEnabled ? s3.BucketEncryption.S3_MANAGED : undefined,
-      versioned: versioningEnabled,
+    new s3.CfnBucket(this, 'SecureBucketResource', {
+      bucketEncryption: encryptionEnabled
+        ? {
+            serverSideEncryptionConfiguration: [
+              {
+                serverSideEncryptionByDefault: {
+                  sseAlgorithm: 'AES256',
+                },
+              },
+            ],
+          }
+        : undefined,
+      versioningConfiguration: {
+        status: versioningEnabled ? 'Enabled' : 'Suspended',
+      },
     });
   }
 }
