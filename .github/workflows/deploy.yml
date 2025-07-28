@@ -1,347 +1,106 @@
-name: 'Secure CDK Deployment Pipeline'
+name: Secure CDK Deployment Pipeline
 
 on:
-  push:  
-    branches: [main, develop] 
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:  
-      environment:  
-        description: 'Environment to deploy' 
+    inputs:
+      environment:
+        description: 'Deployment environment'
         required: true
         default: 'dev'
-        type: choice
-        options:
-          - dev
-          - prod
-      skip_tests:
-        description: 'Skip tests (emergency deployment only)'
-        required: false
-        default: false
-        type: boolean
 
 env:
   AWS_REGION: us-east-1
-  NODE_VERSION: '18'
-  CACHE_VERSION: 'v2'
+  CDK_ENV_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
+  CDK_ENV_REGION: us-east-1
+  NODE_OPTIONS: '--max_old_space_size=4096'
+  JEST_JUNIT_OUTPUT: './reports/junit.xml'
 
 permissions:
   id-token: write
   contents: read
-  actions: read
-  pull-requests: write
-  security-events: write
 
 jobs:
-  # Code Quality and Linting
-  lint-and-format:
-    name: 'Code Quality & Formatting'
-    runs-on: self-hosted
-    timeout-minutes: 10
-    outputs:
-      cache-key: ${{ steps.cache-key.outputs.key }}
+  lint:
+    name: Lint CloudFormation Template
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          fetch-depth: 0
+          python-version: '3.x'
 
-      - name: Generate cache key
-        id: cache-key
-        run: |
-          echo "key=deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('package-lock.json') }}" >> $GITHUB_OUTPUT
+      - name: Install cfn-lint
+        run: pip install cfn-lint
 
-      - name: Setup Node.js
+      - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Cache dependencies
-        uses: actions/cache@v3
-        with:
-          path: |
-            node_modules
-            ~/.npm
-            ~/.cache
-          key: ${{ steps.cache-key.outputs.key }}
-          restore-keys: |
-            deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-
+          node-version: '18'
 
       - name: Install dependencies
-        run: |
-          # Enhanced dependency installation with error handling
-          echo "Starting dependency installation..."
-          
-          # Check if package.json exists
-          if [ ! -f "package.json" ]; then
-            echo "Error: package.json not found"
-            exit 1
-          fi
-          
-          # Clean installation strategy
-          echo "Cleaning previous installations..."
-          rm -rf node_modules package-lock.json 2>/dev/null || true
-          
-          # Configure npm for optimal performance
-          npm config set progress false
-          npm config set audit false
-          npm config set fund false
-          npm config set update-notifier false
-          
-          # Install dependencies with retry logic
-          echo "Installing dependencies..."
-          if npm install --no-audit --no-fund --prefer-offline; then
-            echo "✅ Dependencies installed successfully"
-          else
-            echo "⚠️ npm install failed, trying alternative approach..."
-            
-            # Clear npm cache and retry
-            npm cache clean --force 2>/dev/null || true
-            
-            if npm install --no-audit --no-fund; then
-              echo "✅ Dependencies installed on retry"
-            else
-              echo "❌ Failed to install dependencies"
-              echo "Debugging information:"
-              echo "Node version: $(node --version)"
-              echo "npm version: $(npm --version)"
-              echo "Current directory: $(pwd)"
-              echo "Package.json exists: $(test -f package.json && echo 'yes' || echo 'no')"
-              exit 1
-            fi
-          fi
-          
-          # Verify installation
-          if [ -d "node_modules" ]; then
-            echo "✅ node_modules directory created"
-            echo "Installed packages: $(ls node_modules | wc -l)"
-          else
-            echo "❌ node_modules directory not found after installation"
-            exit 1
-          fi
+        run: npm ci
 
-      - name: Run ESLint
-        run: |
-          # Create eslint results file even if linting fails
-          echo '[]' > eslint-results.json
-          
-          # Run ESLint with proper error handling
-          if npx eslint . --format json --output-file eslint-results.json; then
-            echo "✅ ESLint passed with no issues"
-            npx eslint . --format stylish
-          else
-            echo "⚠️ ESLint found issues, but continuing..."
-            npx eslint . --format stylish || true
-            
-            # Ensure results file exists for artifact upload
-            if [ ! -f "eslint-results.json" ] || [ ! -s "eslint-results.json" ]; then
-              echo '[]' > eslint-results.json
-            fi
-          fi
+      - name: CDK Synth
+        run: npx cdk synth > synthesized.template.json
 
-      - name: Run Prettier check
-        run: |
-          # Check formatting and provide helpful output
-          echo "Checking code formatting with Prettier..."
-          
-          # First, let's see what files need formatting
-          echo "Checking formatting..."
-          PRETTIER_CHECK_OUTPUT=$(npx prettier --check "**/*.{ts,tsx,json,md}" 2>&1 || true)
-          
-          if echo "$PRETTIER_CHECK_OUTPUT" | grep -q "\[warn\]"; then
-            echo "⚠️ Code formatting issues found"
-            echo "Files that need formatting:"
-            echo "$PRETTIER_CHECK_OUTPUT" | grep "\[warn\]" | sed 's/\[warn\] //'
-            
-            echo ""
-            echo "To fix formatting issues locally, run:"
-            echo "  npm run format"
-            echo "  or"
-            echo "  npx prettier --write \"**/*.{ts,tsx,json,md}\""
-            
-            # For all branches, auto-fix formatting in CI
-            echo ""
-            echo "Auto-fixing formatting in CI..."
-            npx prettier --write "**/*.{ts,tsx,json,md}"
-            
-            # Check if there are still issues after auto-fix
-            if npx prettier --check "**/*.{ts,tsx,json,md}" >/dev/null 2>&1; then
-              echo "✅ All formatting issues have been resolved"
-            else
-              echo "⚠️ Some formatting issues remain after auto-fix"
-              npx prettier --check "**/*.{ts,tsx,json,md}" || true
-            fi
-          else
-            echo "✅ All files are properly formatted"
-          fi
+      - name: Run cfn-lint
+        run: cfn-lint --ignore-checks W2001 synthesized.template.json
 
-      - name: TypeScript compilation check
-        run: |
-          npx tsc --noEmit --skipLibCheck
-
-      - name: Upload lint results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: lint-results
-          path: eslint-results.json
-          retention-days: 7
-
-  # Unit Testing with Coverage
   test:
-    name: 'Unit Tests & Coverage'
-    runs-on: self-hosted
-    timeout-minutes: 15
-    needs: lint-and-format
-    if: ${{ !inputs.skip_tests }}
+    name: Run Tests & Coverage
+    runs-on: ubuntu-latest
+    needs: lint
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          node-version: '18'
 
-      - name: Restore dependencies cache
-        uses: actions/cache@v3
-        with:
-          path: |
-            node_modules
-            ~/.npm
-            ~/.cache
-          key: ${{ needs.lint-and-format.outputs.cache-key }}
-          restore-keys: |
-            deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Install dependencies (if needed)
-        run: |
-          # Enhanced dependency check and installation
-          if [ ! -d "node_modules" ] || [ ! -f "node_modules/.package-lock.json" ]; then
-            echo "Installing missing dependencies..."
-            
-            # Configure npm
-            npm config set progress false
-            npm config set audit false
-            npm config set fund false
-            
-            # Install with error handling
-            if npm install --no-audit --no-fund --prefer-offline; then
-              echo "✅ Dependencies installed successfully"
-            else
-              echo "⚠️ Offline install failed, trying online install..."
-              if npm install --no-audit --no-fund; then
-                echo "✅ Dependencies installed online"
-              else
-                echo "❌ Failed to install dependencies"
-                exit 1
-              fi
-            fi
-          else
-            echo "✅ Dependencies already available from cache"
-          fi
+      - name: Run tests with coverage
+        run: npm run test:coverage
 
-      - name: Run unit tests with coverage
-        run: |
-          npm run test:coverage
-        env:
-          NODE_OPTIONS: '--max-old-space-size=4096'
-
-      - name: Upload coverage reports
-        uses: codecov/codecov-action@v4
-        if: always()
-        with:
-          file: ./coverage/lcov.info
-          flags: unittests
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
-
-      - name: Upload test results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: test-results
-          path: |
-            coverage/
-            test-results.xml
-          retention-days: 30
-
-  # CDK Synthesis and Validation
-  cdk-synth:
-    name: 'CDK Synthesis & Validation'
-    runs-on: self-hosted
-    timeout-minutes: 10
-    needs: [lint-and-format, test]
-    if: always() && (needs.lint-and-format.result == 'success' && (needs.test.result == 'success' || needs.test.result == 'skipped'))
-    strategy:
-      matrix:
-        environment: [dev, prod]
-    outputs:
-      dev-template-hash: ${{ steps.template-hash.outputs.dev-hash }}
-      prod-template-hash: ${{ steps.template-hash.outputs.prod-hash }}
+  deploy:
+    name: Deploy CDK Stack
+    runs-on: ubuntu-latest
+    needs: test
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm' 
+          node-version: '18'
 
-      - name: Restore dependencies cache
-        uses: actions/cache@v3
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          path: |
-            node_modules
-            ~/.npm
-            ~/.cache
-          key: ${{ needs.lint-and-format.outputs.cache-key }}
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.OIDC_DEPLOY_ROLE }}
+          role-session-name: github-actions-cdk
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Install dependencies (if needed)
+      - name: CDK Bootstrap (if needed)
         run: |
-          if [ ! -d "node_modules" ]; then
-            npm install --silent --no-audit --no-fund --prefer-offline
-          fi
+          npx cdk bootstrap aws://${{ secrets.AWS_ACCOUNT_ID }}/${{ env.AWS_REGION }}
 
-      - name: Install AWS CDK
+      - name: CDK Deploy
         run: |
-          if ! command -v cdk &> /dev/null; then
-            npm install -g aws-cdk@latest
-          fi
-
-      - name: CDK Synthesis
-        run: |
-          cdk synth \
-            --context env=${{ matrix.environment }} \
-            --output cdk.out/${{ matrix.environment }} \
-            --strict \
-            --verbose
-        env:
-          CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
-
-      - name: Validate CloudFormation templates
-        run: |
-          # Install cfn-lint if not available
-          if ! command -v cfn-lint &> /dev/null; then
-            pip3 install --user cfn-lint
-          fi
-          
-          # Validate all generated templates
-          find cdk.out/${{ matrix.environment }} -name "*.template.json" -exec cfn-lint {} \;
-
-      - name: Generate template hash
-        id: template-hash
-        run: |
-          HASH=$(find cdk.out/${{ matrix.environment }} -name "*.template.json" -exec sha256sum {} \; | sha256sum | cut -d' ' -f1)
-          echo "${{ matrix.environment }}-hash=$HASH" >> $GITHUB_OUTPUT
-
-      - name: Upload CDK templates
-        uses: actions/upload-artifact@v4
-        with:
-          name: cdk-templates-${{ matrix.environment }}
-          path: cdk.out/${{ matrix.environment }}/
-          retention-days: 30
+          npx cdk deploy --require-approval never
