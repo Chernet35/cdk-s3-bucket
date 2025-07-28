@@ -96,10 +96,7 @@ jobs:
           pip3 install cfn-lint
 
       - name: Run cfn-lint (ignore W2001 warnings)
-        run: |
-         cfn-lint --ignore-checks W2001 synthesized.template.json
-      - name: Run cfn-lint
-        run: cfn-lint synthesized.template.json
+        run: cfn-lint --ignore-checks W2001 synthesized.template.json
 
   diff:
     name: CDK Diff
