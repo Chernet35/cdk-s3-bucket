@@ -1,11 +1,9 @@
-import * as exports from '../src/index';
+// test/index.test.ts
+import * as index from '../src/index';
 
-describe('Index Exports', () => {
-  it('should export SecureBucket', () => {
-    expect(exports).toHaveProperty('SecureBucket');
-  });
-
-  it('should export SecureBucketStack', () => {
-    expect(exports).toHaveProperty('SecureBucketStack');
+describe('Index exports', () => {
+  it('should export SecureBucket and SecureBucketStack', () => {
+    expect(index.SecureBucket).toBeDefined();
+    expect(index.SecureBucketStack).toBeDefined();
   });
 });
