@@ -108,7 +108,8 @@ install_dependencies() {
                 --no-audit \
                 --no-fund \
                 --prefer-offline \
-                --cache cache/npm; then
+                --cache cache/npm \
+                --legacy-peer-deps; then
                 install_success=true
             else
                 print_warning "npm install failed on attempt $attempt"
