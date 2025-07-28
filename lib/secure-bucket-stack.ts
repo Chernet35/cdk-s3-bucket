@@ -1,1 +1,6 @@
-import { SecureBucketStack } from '../lib/secure-bucket-stack';
+export class SecureBucket extends Construct {
+  constructor(scope: Construct, id: string, props: SecureBucketProps) {
+    super(scope, id);
+    // ...
+  }
+}
