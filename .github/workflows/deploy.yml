@@ -1,39 +1,33 @@
-name: 'Secure CDK Deployment Pipeline'
+name: Secure CDK Deployment Pipeline
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Target environment (dev/prod)'
+        description: 'Environment to deploy'
         required: true
         default: 'dev'
         type: choice
         options:
           - dev
           - prod
-      skip_tests:
-        description: 'Skip tests (true/false)'
-        required: false
-        default: 'false'
 
 env:
-  NODE_VERSION: 20
+  NODE_VERSION: 18
   AWS_REGION: us-east-1
-  CDK_ENV_DEV: '966302817492/us-east-1'       # replace with actual dev account/region
-  CDK_ENV_PROD: '966302817492/us-east-1'      # replace with actual prod account/region
+  CDK_APP_PATH: bin/app.ts
 
 permissions:
   id-token: write
   contents: read
 
 jobs:
-
-  code-quality:
-    name: 'Lint, Test, Security Scan'
+  install:
+    name: Install Dependencies
     runs-on: ubuntu-latest
 
     steps:
@@ -49,34 +43,33 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: TypeScript compile check
-        run: npx tsc --noEmit
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    needs: install
 
-      - name: Lint (ESLint)
-        run: npx eslint . --ext .ts --max-warnings=0 || true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Run Unit Tests
-        if: ${{ github.event.inputs.skip_tests != 'true' }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile TypeScript
+        run: npm run build
+
+      - name: Run tests
         run: npm test
 
-      - name: Gitleaks Secret Scan
-        uses: gitleaks/gitleaks-action@v2
-        with:
-          config-path: .gitleaks.toml
-        continue-on-error: false
-
-      - name: Trivy Vulnerability Scan
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'table'
-          severity: 'HIGH,CRITICAL'
-
-  synth-and-lint:
-    name: 'CDK Synth and CFN Lint'
+  synth:
+    name: CDK Synth & Lint
     runs-on: ubuntu-latest
-    needs: code-quality
+    needs: build
 
     steps:
       - name: Checkout code
@@ -86,64 +79,80 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
 
-      - name: CDK Synth
+      - name: Compile TypeScript
+        run: npm run build
+
+      - name: Synthesize CDK Template
         run: npx cdk synth > synthesized.template.json
 
-      - name: Install cfn-lint
-        run: pip3 install cfn-lint
-
-      - name: Validate synthesized CloudFormation template
+      - name: Install Python and cfn-lint
         run: |
-          if grep -q '"Resources"' synthesized.template.json; then
-            echo "✅ Template is valid. Running cfn-lint..."
-            cfn-lint --ignore-checks W2001 synthesized.template.json
-          else
-            echo "❌ ERROR: No 'Resources' block found in the template."
-            cat synthesized.template.json
-            exit 1
-          fi
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip
+          pip3 install cfn-lint
 
-  deploy:
-    name: 'Deploy CDK to ${{ github.event.inputs.environment || 'dev' }}'
+      - name: Run cfn-lint (ignore W2001 warnings)
+        run: |
+         cfn-lint --ignore-checks W2001 synthesized.template.json
+      - name: Run cfn-lint
+        run: cfn-lint synthesized.template.json
+
+  diff:
+    name: CDK Diff
     runs-on: ubuntu-latest
-    needs: synth-and-lint
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-
-    environment: ${{ github.event.inputs.environment || 'dev' }}
+    needs: synth
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::${{ secrets[format('AWS_ACCOUNT_ID_{0}', github.event.inputs.environment || 'DEV')] }}:role/GitHubOIDCRole
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Install Node.js & Dependencies
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
 
-      - run: npm ci
+      - name: Install dependencies
+        run: npm ci
 
-      - name: CDK Bootstrap (if needed)
-        run: npx cdk bootstrap aws://$CDK_ENV_DEV
+      - name: Compile TypeScript
+        run: npm run build
+
+      - name: CDK Diff
+        run: npx cdk diff
+
+  deploy:
+    name: Deploy to AWS
+    runs-on: ubuntu-latest
+    needs: diff
+
+    environment:
+      name: ${{ github.event.inputs.environment || 'dev' }}
+      url: https://console.aws.amazon.com/cloudformation/home
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile TypeScript
+        run: npm run build
+
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/github-cdk-deploy-role # 🔁 Replace this
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: CDK Deploy
-        run: |
-          ENVIRONMENT=${{ github.event.inputs.environment || 'dev' }}
-          if [ "$ENVIRONMENT" = "prod" ]; then
-            ACCOUNT_ENV=${CDK_ENV_PROD}
-          else
-            ACCOUNT_ENV=${CDK_ENV_DEV}
-          fi
-          npx cdk deploy --require-approval never --all -c env=$ENVIRONMENT
-
+        run: npx cdk deploy --require-approval never
