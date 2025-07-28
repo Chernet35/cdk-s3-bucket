@@ -23,7 +23,7 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       template.hasResourceProperties('AWS::S3::Bucket', {
         BucketName: 'test-project-secure-bucket-dev',
         VersioningConfiguration: {
@@ -60,7 +60,7 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       template.hasResourceProperties('AWS::S3::Bucket', {
         BucketName: 'test-project-custom-bucket-prod',
       });
@@ -80,7 +80,7 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       template.hasResourceProperties('AWS::KMS::Key', {
         Description: 'KMS key for test-project S3 bucket encryption',
         EnableKeyRotation: true,
@@ -115,7 +115,7 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       template.hasResourceProperties('AWS::S3::Bucket', {
         BucketEncryption: Match.absent(),
       });
@@ -137,7 +137,7 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       template.hasResourceProperties('AWS::S3::Bucket', {
         VersioningConfiguration: {
           Status: 'Enabled',
@@ -157,7 +157,7 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       template.hasResourceProperties('AWS::S3::Bucket', {
         VersioningConfiguration: Match.absent(),
       });
@@ -177,7 +177,7 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       template.hasResourceProperties('AWS::IAM::OpenIDConnectProvider', {
         Url: 'https://token.actions.githubusercontent.com',
         ClientIdList: ['sts.amazonaws.com'],
@@ -225,7 +225,7 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       template.hasResourceProperties('AWS::IAM::Role', {
         AssumeRolePolicyDocument: {
           Statement: [
@@ -257,10 +257,10 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       // Should create two buckets: main bucket and access log bucket
       template.resourceCountIs('AWS::S3::Bucket', 2);
-      
+
       template.hasResourceProperties('AWS::S3::Bucket', {
         BucketName: 'test-project-secure-bucket-dev-access-logs',
         BucketEncryption: {
@@ -287,10 +287,10 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       // Should create only one bucket (main bucket)
       template.resourceCountIs('AWS::S3::Bucket', 1);
-      
+
       template.hasResourceProperties('AWS::S3::Bucket', {
         LoggingConfiguration: {
           DestinationBucketName: 'external-log-bucket',
@@ -311,10 +311,10 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       // Should create only one bucket (main bucket)
       template.resourceCountIs('AWS::S3::Bucket', 1);
-      
+
       template.hasResourceProperties('AWS::S3::Bucket', {
         LoggingConfiguration: Match.absent(),
       });
@@ -334,7 +334,7 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       template.hasResourceProperties('AWS::S3::Bucket', {
         LifecycleConfiguration: {
           Rules: [
@@ -364,7 +364,7 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       template.hasResourceProperties('AWS::S3::Bucket', {
         LifecycleConfiguration: {
           Rules: [
@@ -409,7 +409,7 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       template.hasResourceProperties('AWS::S3::BucketPolicy', {
         PolicyDocument: {
           Statement: Match.arrayWith([
@@ -451,7 +451,7 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       template.hasResourceProperties('AWS::Logs::LogGroup', {
         LogGroupName: '/aws/s3/test-project-secure-bucket-dev',
         RetentionInDays: 180,
@@ -472,7 +472,7 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       template.hasResourceProperties('AWS::S3::Bucket', {
         IntelligentTieringConfigurations: [
           {
@@ -499,7 +499,7 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       template.hasOutput('TestBucketBucketName', {
         Description: 'Name of the created S3 bucket',
         Export: {
@@ -552,7 +552,9 @@ describe('SecureBucket', () => {
       // Act & Assert
       expect(() => {
         new SecureBucket(stack, 'TestBucket', props);
-      }).toThrow('projectId must contain only lowercase letters, numbers, and hyphens');
+      }).toThrow(
+        'projectId must contain only lowercase letters, numbers, and hyphens'
+      );
     });
 
     test('throws error for project ID too long', () => {
@@ -594,7 +596,7 @@ describe('SecureBucket', () => {
 
       // Assert
       const template = Template.fromStack(stack);
-      
+
       template.hasResourceProperties('AWS::S3::Bucket', {
         PublicAccessBlockConfiguration: {
           BlockPublicAcls: true,
