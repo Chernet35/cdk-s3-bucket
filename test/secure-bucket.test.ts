@@ -2,30 +2,65 @@ import { App } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { SecureBucketStack } from '../lib/secure-bucket-stack';
 
-test('S3 Bucket Created with Encryption and Versioning', () => {
-  const app = new App();
-  const stack = new SecureBucketStack(app, 'TestStack', {
-    bucketProps: {
-      encryption: true,
-      versioning: true,
-    },
+describe('SecureBucketStack', () => {
+  it('creates a bucket with encryption and versioning', () => {
+    const app = new App();
+    const stack = new SecureBucketStack(app, 'TestStack', {
+      bucketProps: {
+        encryption: true,
+        versioning: true,
+      },
+    });
+
+    const template = Template.fromStack(stack);
+
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      VersioningConfiguration: {
+        Status: 'Enabled',
+      },
+      BucketEncryption: {
+        ServerSideEncryptionConfiguration: [
+          {
+            ServerSideEncryptionByDefault: {
+              SSEAlgorithm: 'AES256',
+            },
+          },
+        ],
+      },
+    });
   });
 
-  const template = Template.fromStack(stack);
+  it('creates a bucket without encryption and versioning', () => {
+    const app = new App();
+    const stack = new SecureBucketStack(app, 'TestStackWithoutProps', {
+      bucketProps: {
+        encryption: false,
+        versioning: false,
+      },
+    });
 
-  template.resourceCountIs('AWS::S3::Bucket', 1);
-  template.hasResourceProperties('AWS::S3::Bucket', {
-    VersioningConfiguration: {
-      Status: 'Enabled',
-    },
-    BucketEncryption: {
-      ServerSideEncryptionConfiguration: [
-        {
-          ServerSideEncryptionByDefault: {
-            SSEAlgorithm: 'AES256',
-          },
-        },
-      ],
-    },
+    const template = Template.fromStack(stack);
+
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      VersioningConfiguration: {
+        Status: 'Suspended',
+      },
+    });
+
+    // Ensure encryption is NOT present
+    expect(() =>
+      template.hasResourceProperties('AWS::S3::Bucket', {
+        BucketEncryption: {},
+      })
+    ).toThrow();
+  });
+
+  it('creates a bucket with default props (undefined)', () => {
+    const app = new App();
+    const stack = new SecureBucketStack(app, 'TestStackDefaults');
+
+    const template = Template.fromStack(stack);
+    // This will test fallback/undefined/defaults for branching logic
+    template.resourceCountIs('AWS::S3::Bucket', 1);
   });
 });
