@@ -1,17 +1,16 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
-    "module": "CommonJS",
-    "rootDir": ".",                  // ✅ allow src + test together
-    "outDir": "./lib",
-    "strict": true,
+    "target": "ESNext",
+    "module": "ESNext",
+    "jsx": "react-jsx",               // ✅ Enables JSX
+    "moduleResolution": "node",
     "esModuleInterop": true,
+    "strict": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "moduleResolution": "node",
     "resolveJsonModule": true,
-    "declaration": true
+    "allowSyntheticDefaultImports": true
   },
-  "include": ["src", "test"],        // ✅ includes test files correctly
-  "exclude": ["node_modules", "lib"]
+  "include": ["src"],                // ✅ Make sure it includes your source files
+  "exclude": ["node_modules", "dist"]
 }
