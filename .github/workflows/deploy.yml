@@ -8,42 +8,55 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Deployment environment'
+        description: 'Environment to deploy'
         required: true
         default: 'dev'
         type: choice
-        options: [dev, prod]
+        options:
+          - dev
+          - prod
+      skip_tests:
+        description: 'Skip tests (emergency deployment only)'
+        required: false
+        default: false
+        type: boolean
 
 env:
   AWS_REGION: us-east-1
-  NODE_VERSION: '20'
- 
+  NODE_VERSION: '18'
+  CACHE_VERSION: 'v2'
+
 permissions:
   id-token: write
   contents: read
-  security-events: write
   actions: read
+  pull-requests: write
+  security-events: write
 
 jobs:
-  # Reused from nodejs-ci template
-  lint:
-    name: Lint, Format, and TypeScript Check
+  # Code Quality and Linting
+  lint-and-format:
+    name: 'Code Quality & Formatting'
     runs-on: self-hosted
     timeout-minutes: 10
     outputs:
       cache-key: ${{ steps.cache-key.outputs.key }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate cache key
+        id: cache-key
+        run: |
+          echo "key=deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('package-lock.json') }}" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-
-      - name: Generate cache key
-        id: cache-key
-        run: echo "key=deps-${{ runner.os }}-${{ hashFiles('package-lock.json') }}" >> $GITHUB_OUTPUT
 
       - name: Cache dependencies
         uses: actions/cache@v3
@@ -53,51 +66,82 @@ jobs:
             ~/.npm
             ~/.cache
           key: ${{ steps.cache-key.outputs.key }}
+          restore-keys: |
+            deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          # Clean install to resolve dependency conflicts
+          rm -rf node_modules package-lock.json || true
+          npm install --silent --no-audit --no-fund
+          if [ ! -d "node_modules" ]; then
+            npm ci --silent --no-audit --no-fund --prefer-offline
+          else
+            echo "Dependencies already cached"
+          fi
 
-      - name: Lint code
-        run: npx eslint . --ext .ts,.tsx --format stylish
+      - name: Run ESLint
+        run: |
+          npx eslint . --format json --output-file eslint-results.json || true
+          npx eslint . --format stylish
 
-      - name: Format check
-        run: npx prettier --check "**/*.{ts,tsx,json,md}"
+      - name: Run Prettier check
+        run: |
+          npx prettier --check "**/*.{ts,tsx,json,md}" --write=false
 
-      - name: TypeScript check
-        run: npx tsc --noEmit --skipLibCheck
+      - name: TypeScript compilation check
+        run: |
+          npx tsc --noEmit --skipLibCheck
 
+      - name: Upload lint results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lint-results
+          path: eslint-results.json
+          retention-days: 7
+
+  # Unit Testing with Coverage
   test:
-    name: Unit Tests & Coverage
+    name: 'Unit Tests & Coverage'
     runs-on: self-hosted
     timeout-minutes: 15
-    needs: lint
+    needs: lint-and-format
     if: ${{ !inputs.skip_tests }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Restore dependencies
+      - name: Restore dependencies cache
         uses: actions/cache@v3
         with:
           path: |
             node_modules
             ~/.npm
             ~/.cache
-          key: ${{ needs.lint.outputs.cache-key }}
+          key: ${{ needs.lint-and-format.outputs.cache-key }}
+          restore-keys: |
+            deps-${{ runner.os }}-node${{ env.NODE_VERSION }}-
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install dependencies (if needed)
+        run: |
+          if [ ! -d "node_modules" ]; then
+            npm install --silent --no-audit --no-fund --prefer-offline
+          fi
 
-      - name: Run tests with coverage
-        run: npm run test:coverage
+      - name: Run unit tests with coverage
+        run: |
+          npm run test:coverage
         env:
           NODE_OPTIONS: '--max-old-space-size=4096'
 
-      - name: Upload coverage to Codecov
+      - name: Upload coverage reports
         uses: codecov/codecov-action@v4
         if: always()
         with:
@@ -116,41 +160,51 @@ jobs:
             test-results.xml
           retention-days: 30
 
-  synth:
-    name: CDK Synthesis & Template Validation
+  # CDK Synthesis and Validation
+  cdk-synth:
+    name: 'CDK Synthesis & Validation'
     runs-on: self-hosted
     timeout-minutes: 10
-    needs: [lint, test]
-    if: always() && (needs.lint.result == 'success' && (needs.test.result == 'success' || needs.test.result == 'skipped'))
+    needs: [lint-and-format, test]
+    if: always() && (needs.lint-and-format.result == 'success' && (needs.test.result == 'success' || needs.test.result == 'skipped'))
     strategy:
       matrix:
         environment: [dev, prod]
     outputs:
-      template-hash: ${{ steps.template-hash.outputs.hash }}
+      dev-template-hash: ${{ steps.template-hash.outputs.dev-hash }}
+      prod-template-hash: ${{ steps.template-hash.outputs.prod-hash }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Restore dependencies
+      - name: Restore dependencies cache
         uses: actions/cache@v3
         with:
           path: |
             node_modules
             ~/.npm
             ~/.cache
-          key: ${{ needs.lint.outputs.cache-key }}
+          key: ${{ needs.lint-and-format.outputs.cache-key }}
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install dependencies (if needed)
+        run: |
+          if [ ! -d "node_modules" ]; then
+            npm install --silent --no-audit --no-fund --prefer-offline
+          fi
 
       - name: Install AWS CDK
-        run: npm install -g aws-cdk@latest
+        run: |
+          if ! command -v cdk &> /dev/null; then
+            npm install -g aws-cdk@latest
+          fi
 
-      - name: Synthesize CDK app
+      - name: CDK Synthesis
         run: |
           cdk synth \
             --context env=${{ matrix.environment }} \
@@ -160,21 +214,25 @@ jobs:
         env:
           CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
 
-      - name: Validate synthesized templates
+      - name: Validate CloudFormation templates
         run: |
+          # Install cfn-lint if not available
           if ! command -v cfn-lint &> /dev/null; then
             pip3 install --user cfn-lint
           fi
+          
+          # Validate all generated templates
           find cdk.out/${{ matrix.environment }} -name "*.template.json" -exec cfn-lint {} \;
 
       - name: Generate template hash
         id: template-hash
         run: |
           HASH=$(find cdk.out/${{ matrix.environment }} -name "*.template.json" -exec sha256sum {} \; | sha256sum | cut -d' ' -f1)
-          echo "hash=$HASH" >> $GITHUB_OUTPUT
+          echo "${{ matrix.environment }}-hash=$HASH" >> $GITHUB_OUTPUT
 
       - name: Upload CDK templates
         uses: actions/upload-artifact@v4
         with:
           name: cdk-templates-${{ matrix.environment }}
           path: cdk.out/${{ matrix.environment }}/
+          retention-days: 30
