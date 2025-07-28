@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2020",
     "module": "CommonJS",
-    "rootDir": "./src",
+    "rootDir": ".",                  // ✅ allow src + test together
     "outDir": "./lib",
     "strict": true,
     "esModuleInterop": true,
@@ -12,6 +12,6 @@
     "resolveJsonModule": true,
     "declaration": true
   },
-  "include": ["src", "test"],
+  "include": ["src", "test"],        // ✅ includes test files correctly
   "exclude": ["node_modules", "lib"]
 }
