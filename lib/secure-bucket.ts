@@ -10,9 +10,9 @@ export class SecureBucket extends Construct {
   constructor(scope: Construct, id: string, props: SecureBucketProps) {
     super(scope, id);
 
-    new s3.Bucket(this, 'MySecureBucket', {
+    new s3.Bucket(this, 'SecureBucketResource', {
       encryption: props.encryption ? s3.BucketEncryption.S3_MANAGED : undefined,
       versioned: props.versioning,
     });
   }
-} 
+}
