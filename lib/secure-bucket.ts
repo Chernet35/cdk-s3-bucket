@@ -15,4 +15,4 @@ export class SecureBucket extends Construct {
       versioned: props.versioning,
     });
   }
-}
+} 
