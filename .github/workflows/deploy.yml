@@ -71,13 +71,55 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # Clean install to resolve dependency conflicts
-          rm -rf node_modules package-lock.json || true
-          npm install --silent --no-audit --no-fund
-          if [ ! -d "node_modules" ]; then
-            npm ci --silent --no-audit --no-fund --prefer-offline
+          # Enhanced dependency installation with error handling
+          echo "Starting dependency installation..."
+          
+          # Check if package.json exists
+          if [ ! -f "package.json" ]; then
+            echo "Error: package.json not found"
+            exit 1
+          fi
+          
+          # Clean installation strategy
+          echo "Cleaning previous installations..."
+          rm -rf node_modules package-lock.json 2>/dev/null || true
+          
+          # Configure npm for optimal performance
+          npm config set progress false
+          npm config set audit false
+          npm config set fund false
+          npm config set update-notifier false
+          
+          # Install dependencies with retry logic
+          echo "Installing dependencies..."
+          if npm install --no-audit --no-fund --prefer-offline; then
+            echo "✅ Dependencies installed successfully"
           else
-            echo "Dependencies already cached"
+            echo "⚠️ npm install failed, trying alternative approach..."
+            
+            # Clear npm cache and retry
+            npm cache clean --force 2>/dev/null || true
+            
+            if npm install --no-audit --no-fund; then
+              echo "✅ Dependencies installed on retry"
+            else
+              echo "❌ Failed to install dependencies"
+              echo "Debugging information:"
+              echo "Node version: $(node --version)"
+              echo "npm version: $(npm --version)"
+              echo "Current directory: $(pwd)"
+              echo "Package.json exists: $(test -f package.json && echo 'yes' || echo 'no')"
+              exit 1
+            fi
+          fi
+          
+          # Verify installation
+          if [ -d "node_modules" ]; then
+            echo "✅ node_modules directory created"
+            echo "Installed packages: $(ls node_modules | wc -l)"
+          else
+            echo "❌ node_modules directory not found after installation"
+            exit 1
           fi
 
       - name: Run ESLint
@@ -131,8 +173,29 @@ jobs:
 
       - name: Install dependencies (if needed)
         run: |
-          if [ ! -d "node_modules" ]; then
-            npm install --silent --no-audit --no-fund --prefer-offline
+          # Enhanced dependency check and installation
+          if [ ! -d "node_modules" ] || [ ! -f "node_modules/.package-lock.json" ]; then
+            echo "Installing missing dependencies..."
+            
+            # Configure npm
+            npm config set progress false
+            npm config set audit false
+            npm config set fund false
+            
+            # Install with error handling
+            if npm install --no-audit --no-fund --prefer-offline; then
+              echo "✅ Dependencies installed successfully"
+            else
+              echo "⚠️ Offline install failed, trying online install..."
+              if npm install --no-audit --no-fund; then
+                echo "✅ Dependencies installed online"
+              else
+                echo "❌ Failed to install dependencies"
+                exit 1
+              fi
+            fi
+          else
+            echo "✅ Dependencies already available from cache"
           fi
 
       - name: Run unit tests with coverage
