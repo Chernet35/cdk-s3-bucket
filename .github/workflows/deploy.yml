@@ -2,7 +2,7 @@ name: 'Secure CDK Deployment Pipeline'
 
 on:
   push:  
-    branches: [main, develop] 
+    branches: [main, develop]  
   pull_request:
     branches: [main]
   workflow_dispatch:
