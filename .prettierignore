@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build outputs
+lib/
+cdk.out/
+coverage/
+reports/
+logs/
+cache/
+artifacts/
+
+# Generated files
+*.d.ts
+*.js.map
+*.d.ts.map
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# CDK specific
+cdk.context.json
