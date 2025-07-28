@@ -1,14 +1,14 @@
 name: 'Secure CDK Deployment Pipeline'
 
 on:
-  push:  
-    branches: [main, develop]  
+  push:
+    branches: [main, develop]
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:  
-      environment:  
-        description: 'Environment to deploy'  
+    inputs:
+      environment:
+        description: 'Environment to deploy'
         required: true
         default: 'dev'
         type: choice
@@ -74,30 +74,24 @@ jobs:
           # Enhanced dependency installation with error handling
           echo "Starting dependency installation..."
           
-          # Check if package.json exists
           if [ ! -f "package.json" ]; then
             echo "Error: package.json not found"
             exit 1
           fi
           
-          # Clean installation strategy
           echo "Cleaning previous installations..."
           rm -rf node_modules package-lock.json 2>/dev/null || true
           
-          # Configure npm for optimal performance
           npm config set progress false
           npm config set audit false
           npm config set fund false
           npm config set update-notifier false
           
-          # Install dependencies with retry logic
           echo "Installing dependencies..."
           if npm install --no-audit --no-fund --prefer-offline; then
             echo "✅ Dependencies installed successfully"
           else
             echo "⚠️ npm install failed, trying alternative approach..."
-            
-            # Clear npm cache and retry
             npm cache clean --force 2>/dev/null || true
             
             if npm install --no-audit --no-fund; then
@@ -113,7 +107,6 @@ jobs:
             fi
           fi
           
-          # Verify installation
           if [ -d "node_modules" ]; then
             echo "✅ node_modules directory created"
             echo "Installed packages: $(ls node_modules | wc -l)"
@@ -124,18 +117,13 @@ jobs:
 
       - name: Run ESLint
         run: |
-          # Create eslint results file even if linting fails
           echo '[]' > eslint-results.json
-          
-          # Run ESLint with proper error handling
           if npx eslint . --format json --output-file eslint-results.json; then
             echo "✅ ESLint passed with no issues"
             npx eslint . --format stylish
           else
             echo "⚠️ ESLint found issues, but continuing..."
             npx eslint . --format stylish || true
-            
-            # Ensure results file exists for artifact upload
             if [ ! -f "eslint-results.json" ] || [ ! -s "eslint-results.json" ]; then
               echo '[]' > eslint-results.json
             fi
@@ -143,30 +131,20 @@ jobs:
 
       - name: Run Prettier check
         run: |
-          # Check formatting and provide helpful output
           echo "Checking code formatting with Prettier..."
-          
-          # First, let's see what files need formatting
-          echo "Checking formatting..."
           PRETTIER_CHECK_OUTPUT=$(npx prettier --check "**/*.{ts,tsx,json,md}" 2>&1 || true)
-          
           if echo "$PRETTIER_CHECK_OUTPUT" | grep -q "\[warn\]"; then
             echo "⚠️ Code formatting issues found"
             echo "Files that need formatting:"
             echo "$PRETTIER_CHECK_OUTPUT" | grep "\[warn\]" | sed 's/\[warn\] //'
-            
             echo ""
             echo "To fix formatting issues locally, run:"
             echo "  npm run format"
             echo "  or"
             echo "  npx prettier --write \"**/*.{ts,tsx,json,md}\""
-            
-            # For all branches, auto-fix formatting in CI
             echo ""
             echo "Auto-fixing formatting in CI..."
             npx prettier --write "**/*.{ts,tsx,json,md}"
-            
-            # Check if there are still issues after auto-fix
             if npx prettier --check "**/*.{ts,tsx,json,md}" >/dev/null 2>&1; then
               echo "✅ All formatting issues have been resolved"
             else
@@ -219,16 +197,11 @@ jobs:
 
       - name: Install dependencies (if needed)
         run: |
-          # Enhanced dependency check and installation
           if [ ! -d "node_modules" ] || [ ! -f "node_modules/.package-lock.json" ]; then
             echo "Installing missing dependencies..."
-            
-            # Configure npm
             npm config set progress false
             npm config set audit false
             npm config set fund false
-            
-            # Install with error handling
             if npm install --no-audit --no-fund --prefer-offline; then
               echo "✅ Dependencies installed successfully"
             else
@@ -290,7 +263,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm' 
+          cache: 'npm'
 
       - name: Restore dependencies cache
         uses: actions/cache@v3
@@ -313,6 +286,14 @@ jobs:
             npm install -g aws-cdk@latest
           fi
 
+      - name: Set up Python with pip3
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install cfn-lint
+        run: pip install cfn-lint
+
       - name: CDK Synthesis
         run: |
           cdk synth \
@@ -325,12 +306,6 @@ jobs:
 
       - name: Validate CloudFormation templates
         run: |
-          # Install cfn-lint if not available
-          if ! command -v cfn-lint &> /dev/null; then
-            pip3 install --user cfn-lint
-          fi
-          
-          # Validate all generated templates
           find cdk.out/${{ matrix.environment }} -name "*.template.json" -exec cfn-lint {} \;
 
       - name: Generate template hash
