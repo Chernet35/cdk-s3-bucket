@@ -1,3 +1,1 @@
-export class SecureBucket extends Construct {
-  // your implementation...
-}
+import { Construct } from 'constructs';
